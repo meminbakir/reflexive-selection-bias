@@ -1,7 +1,7 @@
 """
 Synthetic Experiments for:
-  "Decision-Triggered Fusion under Policy-Induced MNAR Missingness"
-  Target journal: Information Fusion (Elsevier)
+  "Reflexive Selection Bias in Deployed Multimodal Fusion:
+   Causal Correction for Policy-Induced Feedback Loops"
 
 Experiments:
   Exp 1 — Bias vs. Selectivity: ERM, IPW, Oracle accuracy as policy becomes more selective

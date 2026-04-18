@@ -1,13 +1,10 @@
 # Reflexive Selection Bias in Deployed Multimodal Fusion
 
-Code and data for reproducing the experiments in:
-
-> **Reflexive Selection Bias in Deployed Multimodal Fusion: Causal Correction for Policy-Induced Feedback Loops**
-> Mehmet E. Bakir, New Mexico State University
-
 ## Overview
 
-This repository contains the simulation experiments that validate the theoretical results in the paper.  The single script `simulation_experiments.py` runs all eleven experiments and generates the corresponding figures.
+This repository contains simulation code and data for reproducing the experiments how multimodal fusion systems can create feedback loops where the model's own predictions influence future data acquisition, and we propose causal corrections for the resulting bias.
+
+The single script `simulation_experiments.py` runs all eleven experiments and generates the corresponding figures.
 
 ## Requirements
 
@@ -39,18 +36,19 @@ Generated figures are saved to `figures/` and numerical results to `results/`.
 
 ## Experiments
 
-| # | Experiment | Figure(s) |
-|---|-----------|-----------|
-| 1 | Bias vs. Selectivity | fig1 |
-| 2 | Decision Boundary Visualization | fig2 |
-| 3 | Acquisition Efficiency | fig3 |
-| 4 | IPW Convergence | fig4 |
-| 5 | Reflexive MNAR Feedback Loop | fig5, fig7 |
-| 6 | Heart Disease Semi-Synthetic | fig7_heart |
-| 7 | Baseline Comparison | fig8 |
-| 8 | SUPPORT ICU Real-World | fig10 |
-| 9 | Multi-Feature Scaling | fig11 |
-| 10 | MLP Architecture | fig6 |
+| # | Experiment | Function | Figure(s) |
+|---|-----------|----------|-----------|
+| 1 | Bias vs. Policy Selectivity | `run_exp1` | fig1_bias_vs_selectivity |
+| 2 | Decision Boundary Analysis | `run_exp2` | fig2_decision_boundaries |
+| 3 | Acquisition Budget Analysis | `run_exp3` | fig3_acquisition_efficiency |
+| 4 | Finite-Sample Convergence | `run_exp4` | fig4_ipw_convergence |
+| 5 | Reflexive MNAR with Noisy Scan Policy | `run_exp5` | fig5_reflexive_mnar |
+| 6 | Architecture Generalisation (MLP) | `run_exp6_mlp` | fig6_mlp_arch |
+| 7 | Feedback Loop Dynamics | `run_exp_feedback_loop` | fig7_feedback_loop |
+| 8 | Semi-Synthetic Heart Disease | `run_exp7_semisynthetic` | fig7_heart_semisynthetic |
+| 9 | Baseline Comparison | `run_exp8_baseline_and_calib` | fig8_baseline_comparison |
+| 10 | SUPPORT Study, Real Clinical Data | `run_exp_support` | fig10_support_results |
+| 11 | Multi-Feature Scalability | `run_exp11_multifeature` | fig11_multifeature_scaling |
 
 ## License
 
