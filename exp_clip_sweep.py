@@ -46,7 +46,7 @@ sys.path.insert(0, str(HERE))
 import simulation_experiments as S
 
 # ----------------------------------------------------------------------------
-# Fixed, PRE-SPECIFIED settings (NOT tuned to the result)
+# Fixed, PRE-SPECIFIED settings (settings fixed a priori; fixed seed)
 # ----------------------------------------------------------------------------
 SEED          = 20240613
 EPS_GRID      = [0.0, 0.01, 0.02, 0.05, 0.10, 0.20]
@@ -383,7 +383,7 @@ def main():
 
     fig_pdf, fig_png = make_figure(res_nb, res_bd)
 
-    # --- Plateau analysis (HONEST verdict computation) -----------------------
+    # --- Plateau analysis -----------------------
     print("\n" + "=" * 78)
     print(" PLATEAU ANALYSIS for eps = 0.05  (BINDING regime is the decisive one)")
     print("=" * 78)
@@ -406,7 +406,7 @@ def main():
 
     # ---- The CLAIM-as-stated needs a BIAS sweet spot: over-clipping (eps=0.20)
     #      must cost something so 0.05 is a genuine *balance* (not just "bigger is
-    #      better"). Test honestly whether the bias metric is U-shaped/min at 0.05.
+    #      better"). Test whether the bias metric is U-shaped / minimised at 0.05.
     biases = np.array([bd[str(e)]["bias_mean"] for e in EPS_GRID])
     accs   = np.array([bd[str(e)]["acc_mean"]  for e in EPS_GRID])
     aucs   = np.array([bd[str(e)]["auc_mean"]  for e in EPS_GRID])
@@ -435,7 +435,7 @@ def main():
     print(f"  bias minimized exactly at 0.05:                 {bias_min_at_05}")
     print(f"  accuracy best exactly at 0.05:                  {acc_best_at_05}")
 
-    # HONEST verdict: the *as-stated* claim ("0.05 sits on a stable plateau --
+    # Plateau analysis: the stronger framing ("0.05 sits on a stable plateau --
     # low bias, protected ESS, bounded weights, neither under- NOR over-clipping")
     # requires a GENUINE BALANCE -- a real cost to BOTH under- and over-clipping
     # so that 0.05 is not dominated. We test that strictly:
@@ -447,12 +447,12 @@ def main():
     #
     # Because bias is minimized at eps=0 and accuracy/AUC are maximized at eps=0.20,
     # there is NO interior optimum at 0.05 on EITHER axis. The "balance point" /
-    # "sweet plateau" framing is therefore NOT supported by these data.
+    # "sweet plateau" framing is therefore not borne out by these data.
     optimum_at_05 = bool(bias_min_at_05 or acc_best_at_05)
     # A weaker, defensible claim: clipping controls variance and 0.05 is a
     # reasonable operating point (ESS recovered, weights bounded) -- but that is
-    # NOT the "neither under- nor over-clipping balance" claim as stated.
-    supports = bool(optimum_at_05 and ess_protected and weight_bounded)
+    # not the "neither under- nor over-clipping balance" framing.
+    meets_expectation = bool(optimum_at_05 and ess_protected and weight_bounded)
 
     # ---- NON-BINDING regime cross-check: here the TRUE floor pi_min=0.10 makes
     #      eps in {0,...,0.10} inert, so 0.05 sits on a genuine FLAT plateau, and
@@ -471,8 +471,8 @@ def main():
 
     print(f"\n  0.05 is the bias/accuracy optimum (interior sweet spot): {optimum_at_05}")
     print(f"\n  ==> 'eps=0.05 is a stable balance point "
-          f"(neither under- nor over-clipping)': {supports}")
-    if not supports:
+          f"(neither under- nor over-clipping)': {meets_expectation}")
+    if not meets_expectation:
         print("\n  Interpretation: in the BINDING (estimated-pi, MNAR) regime, "
               "coef-bias is minimized at eps=0 and accuracy/AUC are maximized at "
               "eps=0.20 -- both monotonic in eps -- so there is no interior "
@@ -513,7 +513,7 @@ def main():
             "interior_optimum_at_05": optimum_at_05,
             "nonbinding_flat_plateau_at_05": nb_flat_plateau,
             "nonbinding_overclip_hurts_at_020": nb_overclip_hurts,
-            "supports_claim": supports,
+            "meets_expectation": meets_expectation,
         },
         "interpretation": (
             "BINDING regime: coef-bias and accuracy are MONOTONIC in eps "
@@ -531,8 +531,8 @@ def main():
     with open(json_path, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"\nSaved JSON: {json_path}")
-    print(f"\nSUPPORTS_CLAIM = {supports}")
-    return supports
+    print(f"\nMEETS_EXPECTATION = {meets_expectation}")
+    return meets_expectation
 
 
 if __name__ == "__main__":

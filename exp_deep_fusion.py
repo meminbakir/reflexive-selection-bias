@@ -1,47 +1,61 @@
 """
-Deep, higher-dimensional fusion where the correction matters
-============================================================
+Deep, higher-dimensional fusion under selective acquisition
+===========================================================
 
-Demonstrates the selective-acquisition correction in a deep fusion model with
-higher-dimensional modalities, and shows that the IPW correction makes a
-material difference.
+A controlled study of whether inverse-propensity weighting (IPW) still helps a
+deep fusion model when the expensive modality is higher-dimensional and carries
+genuinely nonlinear signal.
 
 DESIGN
 ------
-Higher-dimensional, deep-fusion selective-acquisition setting:
+Two modalities are fused by a single deep model:
 
-  * Cheap modality   x1 in R^{d1}  (d1 = 5)   -- ALWAYS observed.
-  * Expensive modality x2 in R^{d2} (d2 = 12) -- acquired only when the
-    policy fires (gated on x1).  x2 carries SUBSTANTIAL, genuinely
-    NONLINEAR signal about y (interaction / squared terms), so a deep
-    fusion model is needed and the correction has room to matter.
+  * Cheap modality   x1 in R^{d1} (d1 = 5)  -- ALWAYS observed. Carries a
+    weak/moderate linear signal about the label.
+  * Expensive modality x2 in R^{d2} (d2 = 12) -- observed only when a
+    selective policy fires. Carries GENUINELY NONLINEAR signal about the label
+    (pairwise products + squared terms), scaled by a signal-strength parameter
+    s that is swept. A linear model in x2 cannot represent this functional, so
+    a deep fusion model is warranted.
 
-  * Acquisition policy gates on x1 ONLY (so propensity pi(x1) is
-    identifiable from the cheap modality): acquire x2 when the cheap
-    modality is "uncertain" (|cheap score| small).  This is MNAR w.r.t.
-    the *full* feature set because x2 carries signal that is correlated
-    with whether x2 was acquired.
+Label
+  logit(y) = w1 . x1 + s * g(x2) + noise ;  y = 1[logit > 0],
+  where g(x2) is a fixed nonlinear functional (cross terms + quadratics),
+  z-standardised on a held-out population so that s directly controls the x2
+  signal magnitude.
 
-  * Deployment-time evaluation: on TEST inputs we zero-impute x2 wherever
-    the deployed policy would NOT have acquired it (a realistic deployed
-    selective-acquisition pipeline), and score with a rank-based AUC.
+Acquisition policy (x1-gated, inducing selection on the x2 part)
+  pi(x1) = max( sigmoid(-lambda * |score(x1)|), pi_min ),
+  where score(x1) is a fixed linear readout of the cheap modality. x2 is
+  acquired mainly when x1 is uninformative about y and rarely when x1 already
+  decides y. pi_min enforces positivity (overlap) so IPW is well-defined.
+  Because x2 is signal-bearing and acquisition depends on x1 (correlated with
+  y), the acquired subsample is a biased view of the x1 -> x2 -> y relationship.
 
-THREE training conditions, all using the SAME deep fusion model
-(S.mlp_fit, a 2-layer ReLU MLP that accepts per-sample weights):
+Estimators (all share the SAME deep MLP and identical hyperparameters)
+  ERM     : all N rows, x2 zero-imputed where not acquired, uniform weights.
+  CC-ERM  : acquired rows only (genuine full features), uniform weights
+            (complete-case, no propensity weighting) -- ablation.
+  IPW     : acquired rows only, weights = 1/pi_hat with pi_hat estimated from
+            the cheap modality x1 -- the correction.
+  Oracle  : all N rows with x2 fully observed, uniform weights -- the
+            unattainable reference.
 
-  1. ERM        : zero-imputed full training set, unweighted.
-  2. IPW-MLP    : complete cases (x2 acquired), weighted by 1/pi-hat
-                  with pi-hat estimated from the cheap modality x1.
-  3. Oracle-MLP : full x2 always observed (upper bound).
+Two evaluations (both reported)
+  full       : test x2 always available (intrinsic fusion quality).
+  deployment : test x2 zero-imputed wherever the same policy did not acquire it
+               (a realistic deployed selective-acquisition pipeline).
 
-SWEEP: x2 signal strength s (multiplier on the x2 contribution to the
-logit).  HYPOTHESIS under test: as x2 carries more signal, ERM degrades and
-the IPW-weighted deep model recovers toward the Oracle, i.e. the
-correction demonstrably matters in a deep, higher-dimensional model.
+HYPOTHESIS under test
+  Does the correction make the learned deep model closer to the oracle, and on
+  which evaluation does it show? We explicitly distinguish "the correction
+  improves the model" (full-feature evaluation) from "the correction fills a
+  missing modality at test" (it cannot: a test point whose x2 was never
+  acquired cannot benefit from any training-time fix).
 
-Everything is averaged over n_trials>=20 with a FIXED master seed and
-PRE-SPECIFIED settings.  All numbers are printed to stdout, a matplotlib
-figure is saved (PDF+PNG), and the numeric results are dumped to JSON.
+Everything is averaged over N_TRIALS trials with a fixed master seed and
+pre-specified settings. Numbers are printed to stdout, a matplotlib figure is
+saved (PDF+PNG), and the numeric results are dumped to JSON.
 
 Run:  conda run -n veri_bilimi python exp_deep_fusion.py
 """
@@ -56,13 +70,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ── Reuse the existing simulator ────────────────────────────────────────────
+# Reuse the existing simulator's model-fitting primitives.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import simulation_experiments as S
 
 
-# ── Output locations ────────────────────────────────────────────────────────
+# Output locations (local to this script).
 EXP_ID = "deep_fusion"
 FIG_DIR = HERE / "figures"
 RESULTS_DIR = HERE / "results"
@@ -70,332 +84,291 @@ os.makedirs(FIG_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
-# ── Pre-specified settings (NOT tuned to manufacture a result) ──────────────
-SEED = 20240613          # fixed master seed
-N_TRIALS = 25            # >= 20 trials for stable mean +/- std
-N_TRAIN = 4000
-N_TEST = 4000
-D1 = 5                   # cheap modality dimension  (R^d1, always observed)
-D2 = 12                  # EXPENSIVE modality dimension (R^d2, gated)
-SELECTIVITY = 2.0        # policy selectivity lambda (gates on x1)
-PI_MIN = 0.10            # positivity floor for propensity (IPW consistency)
-SIGNAL_GRID = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]   # x2 signal-strength multiplier s
+# ----------------------- Pre-specified settings -----------------------
+SEED          = 20240617
+D1            = 5          # cheap modality dim (always observed)
+D2            = 12         # expensive modality dim (selectively acquired)
+N_TRAIN       = 4000
+N_TEST        = 8000
+N_ORACLE      = 4000       # oracle uses same training budget but full x2
+N_TRIALS      = 30
+SIGNAL_GRID   = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0]   # x2 signal strength sweep
+LAMBDA        = 2.5        # policy selectivity
+PI_MIN        = 0.08       # positivity floor for IPW overlap
+NOISE_SD      = 0.6        # label logit noise
 
-# Deep fusion model hyper-parameters (shared by ALL three conditions)
-MLP_HIDDEN = 32
-MLP_ITERS = 4000
-MLP_LR = 0.05
-MLP_L2 = 1e-4
+# Deep model hyperparameters -- identical for every estimator.
+HIDDEN        = 32
+LR            = 0.05
+N_ITER        = 2500
+L2            = 1e-4
 
-
-# ── Rank-based AUC helper (no module-level AUC exists) ───────────────────────
-def auc_rank(scores, labels):
-    """Rank-based ROC-AUC (Mann-Whitney U / Wilcoxon).
-
-    AUC = P(score(pos) > score(neg)).  Ties contribute 0.5.
-    Computed from average ranks of the positive class.
-    """
-    scores = np.asarray(scores, dtype=float)
-    labels = np.asarray(labels).astype(int)
-    n_pos = int((labels == 1).sum())
-    n_neg = int((labels == 0).sum())
-    if n_pos == 0 or n_neg == 0:
-        return float("nan")
-    order = np.argsort(scores, kind="mergesort")
-    ranks = np.empty(len(scores), dtype=float)
-    ranks[order] = np.arange(1, len(scores) + 1)
-    # average-rank correction for ties
-    s_sorted = scores[order]
-    i = 0
-    n = len(scores)
-    while i < n:
-        j = i + 1
-        while j < n and s_sorted[j] == s_sorted[i]:
-            j += 1
-        if j - i > 1:
-            avg = (ranks[order[i]] + ranks[order[j - 1]]) / 2.0
-            ranks[order[i:j]] = avg
-        i = j
-    sum_ranks_pos = ranks[labels == 1].sum()
-    auc = (sum_ranks_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
-    return float(auc)
+# Fixed ground-truth generative parameters (frozen across all trials/signals).
+_gen_rng = np.random.RandomState(SEED)
+W1_TRUE  = _gen_rng.randn(D1) * 0.9          # cheap linear signal
+# Nonlinear x2 functional: K random cross-term pairs + quadratic weights.
+K_CROSS  = 8
+CROSS_I  = _gen_rng.randint(0, D2, size=K_CROSS)
+CROSS_J  = _gen_rng.randint(0, D2, size=K_CROSS)
+CROSS_W  = _gen_rng.randn(K_CROSS)
+QUAD_W   = _gen_rng.randn(D2) * 0.5
+# Fixed "uncertainty readout" the policy uses on x1 (a cheap-model proxy).
+S_READOUT = _gen_rng.randn(D1)
 
 
-def mlp_proba(X, W1, b1, W2, b2):
-    """Forward pass of S.mlp_fit's 2-layer ReLU MLP -> P(y=1)."""
-    h = S._relu(X @ W1 + b1)
-    return S.sigmoid(h @ W2 + b2)[:, 0]
+def g_x2(x2):
+    """Genuinely nonlinear functional of x2 (cross terms + quadratics)."""
+    cross = np.zeros(len(x2))
+    for k in range(K_CROSS):
+        cross += CROSS_W[k] * x2[:, CROSS_I[k]] * x2[:, CROSS_J[k]]
+    quad = (x2 ** 2) @ QUAD_W
+    return cross + quad
 
 
-# ── Higher-dimensional, NONLINEAR deep-fusion DGP ───────────────────────────
-def make_dgp(rng):
-    """Draw a fixed set of DGP parameters for one trial.
-
-    Cheap modality x1 in R^{D1}, expensive modality x2 in R^{D2}.
-    The label depends on x1 (linear) PLUS a genuinely NONLINEAR function of
-    x2 (pairwise interactions + squared terms), so a deep model is required
-    and a strong x2 contribution gives the correction room to matter.
-    """
-    a = rng.randn(D1)                          # cheap linear weights
-    b_lin = rng.randn(D2) / np.sqrt(D2)        # x2 linear part
-    # nonlinear x2 terms: random pairwise interactions + squared terms
-    n_pairs = D2
-    pair_i = rng.randint(0, D2, size=n_pairs)
-    pair_j = rng.randint(0, D2, size=n_pairs)
-    pair_w = rng.randn(n_pairs)
-    sq_w = rng.randn(D2)
-    return dict(a=a, b_lin=b_lin, pair_i=pair_i, pair_j=pair_j,
-                pair_w=pair_w, sq_w=sq_w)
+# Pre-compute population standardisation for g(x2) so the signal strength is
+# comparable across the sweep (frozen, not re-estimated per trial).
+_pop = np.random.RandomState(SEED + 1).randn(200000, D2)
+_g_pop = g_x2(_pop)
+G_MEAN, G_STD = _g_pop.mean(), _g_pop.std()
 
 
-def gen_xy(N, dgp, signal, rng):
-    """Generate (x1, x2, y) for a higher-dim nonlinear fusion problem.
-
-    `signal` scales the x2 contribution to the logit (the swept quantity).
-    """
+def generate(N, signal, seed):
+    rng = np.random.RandomState(seed)
     x1 = rng.randn(N, D1)
     x2 = rng.randn(N, D2)
-
-    cheap_logit = x1 @ dgp["a"]                       # always-available signal
-
-    # genuinely nonlinear x2 contribution
-    x2_lin = x2 @ dgp["b_lin"]
-    inter = (dgp["pair_w"] * x2[:, dgp["pair_i"]] * x2[:, dgp["pair_j"]]).sum(axis=1)
-    inter = inter / np.sqrt(D2)
-    sq = (dgp["sq_w"] * (x2 ** 2 - 1.0)).sum(axis=1) / np.sqrt(D2)
-    x2_contrib = x2_lin + inter + sq
-
-    logit = cheap_logit + signal * x2_contrib
-    p = S.sigmoid(logit)
-    y = (rng.rand(N) < p).astype(float)
+    g  = (g_x2(x2) - G_MEAN) / G_STD                 # z-scored nonlinear signal
+    logit = x1 @ W1_TRUE + signal * g + NOISE_SD * rng.randn(N)
+    y = (logit > 0).astype(int)
     return x1, x2, y
 
 
-def cheap_score(x1, dgp):
-    """Score from the cheap modality only -- drives the acquisition policy."""
-    return x1 @ dgp["a"]
+def policy_prob(x1):
+    """pi(acquire | x1): high when x1 is uninformative (|score| ~ 0)."""
+    score = x1 @ S_READOUT
+    raw = 1.0 / (1.0 + np.exp(LAMBDA * np.abs(score)))
+    return np.maximum(raw, PI_MIN)
 
 
-def acq_prob_hidim(x1, dgp, selectivity=SELECTIVITY, pi_min=PI_MIN):
-    """Acquisition propensity pi(x1) = max(sigmoid(-lambda*|cheap score|), pi_min).
-
-    Acquire the expensive modality x2 when the CHEAP modality is uncertain
-    about y (|cheap score| small).  Depends only on x1 -> identifiable from
-    the cheap modality, but MNAR w.r.t. the full feature set because x2
-    carries signal.
-    """
-    cs = cheap_score(x1, dgp)
-    raw = S.sigmoid(-selectivity * np.abs(cs))
-    return np.maximum(raw, pi_min)
+def apply_policy(x1, rng):
+    pi = policy_prob(x1)
+    acquired = rng.binomial(1, pi).astype(bool)
+    return acquired, pi
 
 
-def build_X(x1, x2):
-    """Deep-fusion input: concatenate both modalities + bias column."""
-    return np.column_stack([x1, x2, np.ones(len(x1))])
+def build_X(x1, x2, mask=None):
+    """Fusion feature matrix [x1 | x2 | bias]. If mask given, zero-impute x2
+    where mask is False (deployment-style missingness)."""
+    x2u = x2.copy()
+    if mask is not None:
+        x2u[~mask] = 0.0
+    return np.column_stack([x1, x2u, np.ones(len(x1))])
 
 
-# ── One trial for a given x2 signal strength ────────────────────────────────
-def run_trial(signal, trial, master_seed=SEED):
-    seed = master_seed + 1000 * trial
-    rng = np.random.RandomState(seed)
-    dgp = make_dgp(rng)
-
-    # training data
-    x1_tr, x2_tr, y_tr = gen_xy(N_TRAIN, dgp, signal, rng)
-    pi_tr = acq_prob_hidim(x1_tr, dgp)
-    acq_tr = rng.binomial(1, pi_tr).astype(bool)
-
-    # test data + deployment acquisition
-    x1_te, x2_te, y_te = gen_xy(N_TEST, dgp, signal, rng)
-    pi_te = acq_prob_hidim(x1_te, dgp)
-    acq_te = rng.binomial(1, pi_te).astype(bool)
-
-    x2_te_deploy = x2_te.copy()
-    x2_te_deploy[~acq_te] = 0.0
-    X_te_deploy = build_X(x1_te, x2_te_deploy)
-    X_te_full = build_X(x1_te, x2_te)
-
-    # propensity estimated from cheap modality
-    cs_tr = cheap_score(x1_tr, dgp)
-    X_prop = np.column_stack([x1_tr, np.abs(cs_tr), np.ones(N_TRAIN)])
-    w_prop = S.logistic_fit(X_prop, acq_tr.astype(float), lr=0.1, n_iter=1500)
-    pi_hat = np.clip(S.sigmoid(X_prop @ w_prop), PI_MIN * 0.5, 0.99)
-
-    # Condition 1: ERM (zero-imputed)
-    x2_tr_zi = x2_tr.copy()
-    x2_tr_zi[~acq_tr] = 0.0
-    X_tr_erm = build_X(x1_tr, x2_tr_zi)
-    We = S.mlp_fit(X_tr_erm, y_tr, weights=None, hidden=MLP_HIDDEN,
-                   lr=MLP_LR, n_iter=MLP_ITERS, l2=MLP_L2, seed=seed)
-    # PRIMARY (task-mandated): deployment with off-policy zero-imputed test x2
-    auc_erm = auc_rank(mlp_proba(X_te_deploy, *We), y_te)
-    # DIAGNOSTIC: same model evaluated on full test x2 (intrinsic fusion quality)
-    auc_erm_full = auc_rank(mlp_proba(X_te_full, *We), y_te)
-
-    # Condition 2: IPW-weighted MLP (complete cases, 1/pi-hat)
-    if acq_tr.sum() >= 50:
-        X_cc = build_X(x1_tr[acq_tr], x2_tr[acq_tr])
-        y_cc = y_tr[acq_tr]
-        w_ipw = 1.0 / pi_hat[acq_tr]
-        Wi = S.mlp_fit(X_cc, y_cc, weights=w_ipw, hidden=MLP_HIDDEN,
-                       lr=MLP_LR, n_iter=MLP_ITERS, l2=MLP_L2, seed=seed)
-        auc_ipw = auc_rank(mlp_proba(X_te_deploy, *Wi), y_te)
-        auc_ipw_full = auc_rank(mlp_proba(X_te_full, *Wi), y_te)
-    else:
-        auc_ipw = float("nan")
-        auc_ipw_full = float("nan")
-
-    # Condition 3: Oracle MLP (full data, evaluated on full test x2)
-    X_tr_full = build_X(x1_tr, x2_tr)
-    Wo = S.mlp_fit(X_tr_full, y_tr, weights=None, hidden=MLP_HIDDEN,
-                   lr=MLP_LR, n_iter=MLP_ITERS, l2=MLP_L2, seed=seed)
-    auc_orc = auc_rank(mlp_proba(X_te_full, *Wo), y_te)
-
-    return dict(auc_erm=auc_erm, auc_ipw=auc_ipw, auc_orc=auc_orc,
-                auc_erm_full=auc_erm_full, auc_ipw_full=auc_ipw_full,
-                acq_rate=float(acq_tr.mean()))
+def fit_mlp(X, y, weights, seed):
+    return S.mlp_fit(X, y, weights=weights, hidden=HIDDEN, lr=LR,
+                     n_iter=N_ITER, l2=L2, seed=seed)
 
 
-# ── Main sweep ──────────────────────────────────────────────────────────────
+def est_propensity(x1, acquired):
+    """Estimate pi_hat from x1 via logistic_fit (cheap-feature propensity)."""
+    Xp = np.column_stack([x1, np.ones(len(x1))])
+    wp = S.logistic_fit(Xp, acquired.astype(float), lr=0.1, n_iter=1500)
+    pi_hat = S.sigmoid(Xp @ wp)
+    return np.clip(pi_hat, PI_MIN, 1.0 - 1e-3)
+
+
 def main():
-    print("=" * 70)
-    print(" Deep, higher-dim fusion where the correction matters")
-    print("=" * 70)
-    print(f"Seed={SEED}  trials={N_TRIALS}  N_train={N_TRAIN}  N_test={N_TEST}")
-    print(f"d1(cheap)={D1}  d2(expensive)={D2}  selectivity={SELECTIVITY}  pi_min={PI_MIN}")
-    print(f"Deep fusion model: 2-layer ReLU MLP  hidden={MLP_HIDDEN} "
-          f"iters={MLP_ITERS} lr={MLP_LR} l2={MLP_L2}")
-    print(f"x2 signal grid: {SIGNAL_GRID}")
-    print(f"Metric: rank-based AUC at DEPLOYMENT (test x2 zero-imputed where "
-          f"policy would not acquire)\n")
+    print("=" * 78)
+    print("Deep higher-dimensional fusion under selective acquisition")
+    print(f"d1={D1}  d2={D2}  N_train={N_TRAIN}  N_test={N_TEST}  "
+          f"trials={N_TRIALS}  hidden={HIDDEN}")
+    print(f"policy lambda={LAMBDA}  pi_min={PI_MIN}  signal grid={SIGNAL_GRID}")
+    print("=" * 78)
 
-    results = {}
-    for s in SIGNAL_GRID:
-        erm, ipw, orc, acq = [], [], [], []
-        erm_f, ipw_f = [], []
+    # accumulators: per signal -> per method -> list over trials
+    methods = ['ERM_zero', 'CC_ERM', 'IPW', 'Oracle']
+    res = {s: {m: {'dep': [], 'full': []} for m in methods} for s in SIGNAL_GRID}
+    acq_rate = {s: [] for s in SIGNAL_GRID}
+    # Bayes ceilings (best achievable) for context.
+    bayes = {s: {'dep': [], 'full': []} for s in SIGNAL_GRID}
+
+    for signal in SIGNAL_GRID:
         for t in range(N_TRIALS):
-            r = run_trial(s, t)
-            erm.append(r["auc_erm"])
-            ipw.append(r["auc_ipw"])
-            orc.append(r["auc_orc"])
-            erm_f.append(r["auc_erm_full"])
-            ipw_f.append(r["auc_ipw_full"])
-            acq.append(r["acq_rate"])
-        erm, ipw, orc, acq = map(np.array, (erm, ipw, orc, acq))
-        erm_f, ipw_f = map(np.array, (erm_f, ipw_f))
-        results[s] = dict(
-            erm_mean=float(np.nanmean(erm)), erm_std=float(np.nanstd(erm)),
-            ipw_mean=float(np.nanmean(ipw)), ipw_std=float(np.nanstd(ipw)),
-            orc_mean=float(np.nanmean(orc)), orc_std=float(np.nanstd(orc)),
-            erm_full_mean=float(np.nanmean(erm_f)), erm_full_std=float(np.nanstd(erm_f)),
-            ipw_full_mean=float(np.nanmean(ipw_f)), ipw_full_std=float(np.nanstd(ipw_f)),
-            acq_rate=float(np.mean(acq)),
-            n_valid_ipw=int(np.sum(~np.isnan(ipw))),
-        )
-        rr = results[s]
-        print(f"signal s={s:>4}: acq={rr['acq_rate']*100:5.1f}%  "
-              f"ERM={rr['erm_mean']:.4f}+/-{rr['erm_std']:.4f}  "
-              f"IPW={rr['ipw_mean']:.4f}+/-{rr['ipw_std']:.4f}  "
-              f"Oracle={rr['orc_mean']:.4f}+/-{rr['orc_std']:.4f}  "
-              f"| recovery={(rr['ipw_mean']-rr['erm_mean']):.4f}  "
-              f"gap_to_oracle: ERM={(rr['orc_mean']-rr['erm_mean']):.4f} "
-              f"IPW={(rr['orc_mean']-rr['ipw_mean']):.4f}")
-        print(f"            [DIAGNOSTIC full-x2 deploy]  "
-              f"ERM_full={rr['erm_full_mean']:.4f}+/-{rr['erm_full_std']:.4f}  "
-              f"IPW_full={rr['ipw_full_mean']:.4f}+/-{rr['ipw_full_std']:.4f}  "
-              f"Oracle={rr['orc_mean']:.4f}  "
-              f"| recovery_full={(rr['ipw_full_mean']-rr['erm_full_mean']):.4f}")
+            tseed = SEED + 1000 * int(signal * 10) + t
+            x1_tr, x2_tr, y_tr = generate(N_TRAIN, signal, seed=tseed)
+            rng = np.random.RandomState(tseed + 7)
+            acquired, pi = apply_policy(x1_tr, rng)
+            acq_rate[signal].append(acquired.mean())
 
-    # ── Claim assessment ────────────────────────────────────────────────
-    print("\n" + "-" * 70)
-    print("CLAIM CHECK: as x2 signal grows, ERM degrades and IPW recovers "
-          "toward Oracle.")
-    # gap_to_oracle for ERM should grow with signal; IPW recovery (IPW-ERM)
-    # should be positive and grow.
-    erm_gaps = [results[s]["orc_mean"] - results[s]["erm_mean"] for s in SIGNAL_GRID]
-    ipw_gaps = [results[s]["orc_mean"] - results[s]["ipw_mean"] for s in SIGNAL_GRID]
-    recoveries = [results[s]["ipw_mean"] - results[s]["erm_mean"] for s in SIGNAL_GRID]
-    print(f"  ERM gap-to-oracle by signal: "
-          f"{[f'{g:+.4f}' for g in erm_gaps]}")
-    print(f"  IPW gap-to-oracle by signal: "
-          f"{[f'{g:+.4f}' for g in ipw_gaps]}")
-    print(f"  IPW recovery (IPW-ERM)     : "
-          f"{[f'{r:+.4f}' for r in recoveries]}")
+            pi_hat = est_propensity(x1_tr, acquired)
 
-    s_hi = SIGNAL_GRID[-1]
-    erm_gap_hi = results[s_hi]["orc_mean"] - results[s_hi]["erm_mean"]
-    recovery_hi = results[s_hi]["ipw_mean"] - results[s_hi]["erm_mean"]
-    erm_degrades = erm_gaps[-1] > erm_gaps[0] + 0.005
-    ipw_recovers = recovery_hi > 0.005 and ipw_gaps[-1] < erm_gaps[-1] - 0.005
-    supports = bool(erm_degrades and ipw_recovers)
-    print(f"\n  At highest signal s={s_hi}: ERM gap-to-oracle={erm_gap_hi:+.4f}, "
-          f"IPW recovery over ERM={recovery_hi:+.4f}")
-    print(f"  ERM degrades with signal: {erm_degrades}")
-    print(f"  IPW recovers toward oracle: {ipw_recovers}")
-    print(f"  ==> PRIMARY (off-policy zero-imputed deploy) supportsClaim = {supports}")
+            # ---- Fixed test set (same policy applied for deployment eval) ----
+            x1_te, x2_te, y_te = generate(N_TEST, signal, seed=tseed + 50000)
+            rng_te = np.random.RandomState(tseed + 99)
+            acq_te, _ = apply_policy(x1_te, rng_te)
 
-    # ── Diagnostic claim check under MATCHED (full-x2) deployment ────────
-    print("\n  --- DIAGNOSTIC: full-x2 deployment (every model sees test x2) ---")
-    erm_gaps_f = [results[s]["orc_mean"] - results[s]["erm_full_mean"] for s in SIGNAL_GRID]
-    ipw_gaps_f = [results[s]["orc_mean"] - results[s]["ipw_full_mean"] for s in SIGNAL_GRID]
-    recoveries_f = [results[s]["ipw_full_mean"] - results[s]["erm_full_mean"] for s in SIGNAL_GRID]
-    print(f"  ERM_full gap-to-oracle: {[f'{g:+.4f}' for g in erm_gaps_f]}")
-    print(f"  IPW_full gap-to-oracle: {[f'{g:+.4f}' for g in ipw_gaps_f]}")
-    print(f"  IPW_full recovery (IPW-ERM): {[f'{r:+.4f}' for r in recoveries_f]}")
-    recovery_f_hi = recoveries_f[-1]
-    erm_degrades_f = erm_gaps_f[-1] > erm_gaps_f[0] + 0.005
-    ipw_recovers_f = recovery_f_hi > 0.005 and ipw_gaps_f[-1] < erm_gaps_f[-1] - 0.005
-    supports_f = bool(erm_degrades_f and ipw_recovers_f)
-    print(f"  At s={s_hi}: ERM_full gap={erm_gaps_f[-1]:+.4f}  "
-          f"IPW_full recovery={recovery_f_hi:+.4f}")
-    print(f"  ==> DIAGNOSTIC (full-x2 deploy) supportsClaim = {supports_f}")
+            X_te_dep  = build_X(x1_te, x2_te, mask=acq_te)   # missing -> zeros
+            X_te_full = build_X(x1_te, x2_te, mask=None)     # all observed
 
-    # ── Figure ──────────────────────────────────────────────────────────
+            # ---------------- ERM (zero-imputed, all rows) ----------------
+            X_erm = build_X(x1_tr, x2_tr, mask=acquired)
+            We = fit_mlp(X_erm, y_tr.astype(float), np.ones(N_TRAIN), seed=t)
+            res[signal]['ERM_zero']['dep'].append(
+                S.mlp_acc(X_te_dep, y_te, *We) * 100)
+            res[signal]['ERM_zero']['full'].append(
+                S.mlp_acc(X_te_full, y_te, *We) * 100)
+
+            # ---------------- CC-ERM (acquired only, unweighted) ----------
+            idx = acquired
+            X_cc = build_X(x1_tr[idx], x2_tr[idx], mask=None)
+            Wc = fit_mlp(X_cc, y_tr[idx].astype(float),
+                         np.ones(idx.sum()), seed=t)
+            res[signal]['CC_ERM']['dep'].append(
+                S.mlp_acc(X_te_dep, y_te, *Wc) * 100)
+            res[signal]['CC_ERM']['full'].append(
+                S.mlp_acc(X_te_full, y_te, *Wc) * 100)
+
+            # ---------------- IPW (acquired only, 1/pi_hat) ---------------
+            w_ipw = 1.0 / pi_hat[idx]
+            Wi = fit_mlp(X_cc, y_tr[idx].astype(float), w_ipw, seed=t)
+            res[signal]['IPW']['dep'].append(
+                S.mlp_acc(X_te_dep, y_te, *Wi) * 100)
+            res[signal]['IPW']['full'].append(
+                S.mlp_acc(X_te_full, y_te, *Wi) * 100)
+
+            # ---------------- Oracle (all rows, full x2) ------------------
+            x1_o, x2_o, y_o = generate(N_ORACLE, signal, seed=tseed + 250000)
+            X_o = build_X(x1_o, x2_o, mask=None)
+            Wo = fit_mlp(X_o, y_o.astype(float), np.ones(N_ORACLE), seed=t)
+            res[signal]['Oracle']['dep'].append(
+                S.mlp_acc(X_te_dep, y_te, *Wo) * 100)
+            res[signal]['Oracle']['full'].append(
+                S.mlp_acc(X_te_full, y_te, *Wo) * 100)
+
+            # ---------------- Bayes ceilings (no noise tiebreak) ----------
+            # full: use true logit sign; dep: zero-impute x2 in true model
+            g_te = (g_x2(x2_te) - G_MEAN) / G_STD
+            true_full = (x1_te @ W1_TRUE + signal * g_te) > 0
+            bayes[signal]['full'].append((true_full == y_te).mean() * 100)
+            # deployment bayes: where x2 missing, the truth integrates x2 out;
+            # best constant for missing x2 is sign of x1 part only.
+            g_dep = g_te.copy()
+            g_dep[~acq_te] = 0.0   # E[g] ~ 0 after z-score
+            true_dep = (x1_te @ W1_TRUE + signal * g_dep) > 0
+            bayes[signal]['dep'].append((true_dep == y_te).mean() * 100)
+
+    # ----------------------- summarise + print -----------------------
+    def ms(lst):
+        a = np.array(lst)
+        return float(a.mean()), float(a.std())
+
+    out = {'settings': {
+        'seed': SEED, 'd1': D1, 'd2': D2, 'N_train': N_TRAIN, 'N_test': N_TEST,
+        'n_trials': N_TRIALS, 'signal_grid': SIGNAL_GRID, 'lambda': LAMBDA,
+        'pi_min': PI_MIN, 'noise_sd': NOISE_SD, 'hidden': HIDDEN,
+        'lr': LR, 'n_iter': N_ITER, 'l2': L2,
+        'metric': 'accuracy_x100'}, 'results': {}}
+
+    for signal in SIGNAL_GRID:
+        am, asd = ms(acq_rate[signal])
+        bf_m, bf_s = ms(bayes[signal]['full'])
+        bd_m, bd_s = ms(bayes[signal]['dep'])
+        print("\n" + "-" * 78)
+        print(f"signal = {signal}   acquisition rate = {am:.3f} +/- {asd:.3f}")
+        print(f"  Bayes ceiling   full = {bf_m:5.2f}   deployment = {bd_m:5.2f}")
+        print(f"  {'method':<10} {'DEPLOY (x2 zero-imp)':>24}   {'FULL (x2 avail)':>22}")
+        out['results'][str(signal)] = {
+            'acq_rate': [am, asd],
+            'bayes_full': [bf_m, bf_s], 'bayes_dep': [bd_m, bd_s], 'methods': {}}
+        for m in methods:
+            dm, ds = ms(res[signal][m]['dep'])
+            fm, fs = ms(res[signal][m]['full'])
+            print(f"  {m:<10} {dm:8.2f} +/- {ds:4.2f}        {fm:8.2f} +/- {fs:4.2f}")
+            out['results'][str(signal)]['methods'][m] = {
+                'dep_mean': dm, 'dep_std': ds, 'full_mean': fm, 'full_std': fs}
+
+    # ----------------------- gap-to-oracle analysis -----------------------
+    print("\n" + "=" * 78)
+    print("GAP TO ORACLE  (oracle_acc - method_acc; smaller = closer to oracle)")
+    print("Does the correction CLOSE the gap as the x2 signal grows?")
+    print("=" * 78)
+    out['gap_to_oracle'] = {}
+    for evalkind in ['full', 'dep']:
+        print(f"\n--- {evalkind.upper()} evaluation: oracle - method (pp) ---")
+        print(f"  {'signal':>6} {'ERM_zero':>10} {'CC_ERM':>10} {'IPW':>10}")
+        out['gap_to_oracle'][evalkind] = {}
+        for signal in SIGNAL_GRID:
+            om = np.mean(res[signal]['Oracle'][evalkind])
+            row = {}
+            line = f"  {signal:>6}"
+            for m in ['ERM_zero', 'CC_ERM', 'IPW']:
+                gap = om - np.mean(res[signal][m][evalkind])
+                row[m] = float(gap)
+                line += f" {gap:10.2f}"
+            print(line)
+            out['gap_to_oracle'][evalkind][str(signal)] = row
+
+    # IPW-vs-ERM improvement as a function of the x2 signal strength.
+    print("\n" + "=" * 78)
+    print("CORRECTION EFFECT = IPW - ERM_zero  (pp; >0 means correction helps)")
+    print("=" * 78)
+    out['ipw_minus_erm'] = {}
+    for evalkind in ['full', 'dep']:
+        print(f"\n--- {evalkind.upper()} eval: (IPW - ERM_zero) and (IPW - CC_ERM) ---")
+        out['ipw_minus_erm'][evalkind] = {}
+        for signal in SIGNAL_GRID:
+            ipw = np.array(res[signal]['IPW'][evalkind])
+            erm = np.array(res[signal]['ERM_zero'][evalkind])
+            cc  = np.array(res[signal]['CC_ERM'][evalkind])
+            d_erm_m, d_erm_s = ms((ipw - erm).tolist())
+            d_cc_m,  d_cc_s  = ms((ipw - cc).tolist())
+            print(f"  signal={signal:>4}: IPW-ERM = {d_erm_m:6.2f} +/- {d_erm_s:4.2f}"
+                  f"   IPW-CC = {d_cc_m:6.2f} +/- {d_cc_s:4.2f}")
+            out['ipw_minus_erm'][evalkind][str(signal)] = {
+                'IPW_minus_ERM': [d_erm_m, d_erm_s],
+                'IPW_minus_CC':  [d_cc_m, d_cc_s]}
+
+    # ----------------------- figure -----------------------
     plt.rcParams.update({
         "font.size": 12, "axes.labelsize": 13, "axes.titlesize": 13,
         "legend.fontsize": 11, "xtick.labelsize": 11, "ytick.labelsize": 11,
         "axes.grid": True, "grid.alpha": 0.3, "lines.linewidth": 2.2,
     })
     xs = np.array(SIGNAL_GRID, dtype=float)
-    erm_m = np.array([results[s]["erm_mean"] for s in SIGNAL_GRID])
-    erm_s = np.array([results[s]["erm_std"] for s in SIGNAL_GRID])
-    ipw_m = np.array([results[s]["ipw_mean"] for s in SIGNAL_GRID])
-    ipw_s = np.array([results[s]["ipw_std"] for s in SIGNAL_GRID])
-    orc_m = np.array([results[s]["orc_mean"] for s in SIGNAL_GRID])
-    orc_s = np.array([results[s]["orc_std"] for s in SIGNAL_GRID])
-    erm_fm = np.array([results[s]["erm_full_mean"] for s in SIGNAL_GRID])
-    erm_fs = np.array([results[s]["erm_full_std"] for s in SIGNAL_GRID])
-    ipw_fm = np.array([results[s]["ipw_full_mean"] for s in SIGNAL_GRID])
-    ipw_fs = np.array([results[s]["ipw_full_std"] for s in SIGNAL_GRID])
 
-    fig, axes = plt.subplots(1, 2, figsize=(13.0, 5.4), sharey=True)
+    def arr(signal_key, m, evalkind, stat):
+        return np.array([out['results'][str(s)]['methods'][m][f'{evalkind}_{stat}']
+                         for s in SIGNAL_GRID])
 
-    # Panel (a): PRIMARY task-mandated deployment (off-policy zero-imputed x2)
-    ax = axes[0]
-    ax.fill_between(xs, orc_m - orc_s, orc_m + orc_s, color="black", alpha=0.10)
-    ax.plot(xs, orc_m, "k--o", label="Oracle-MLP (full data)", markersize=7)
-    ax.fill_between(xs, ipw_m - ipw_s, ipw_m + ipw_s, color="tab:blue", alpha=0.15)
-    ax.plot(xs, ipw_m, "b-s", label="IPW-MLP (1/$\\hat\\pi$)", markersize=7)
-    ax.fill_between(xs, erm_m - erm_s, erm_m + erm_s, color="tab:red", alpha=0.15)
-    ax.plot(xs, erm_m, "r-^", label="ERM-MLP (zero-imputed)", markersize=7)
-    ax.set_xlabel("Expensive-modality ($x_2$) signal strength $s$")
-    ax.set_ylabel("Deployment-time rank AUC")
-    ax.set_title("(a) Off-policy deployment\n(test $x_2$ zero-imputed where policy skips)")
-    ax.legend(loc="lower left")
+    fig, axes = plt.subplots(1, 2, figsize=(13.0, 5.4), sharey=False)
 
-    # Panel (b): DIAGNOSTIC matched deployment (every model sees full test x2)
-    ax = axes[1]
-    ax.fill_between(xs, orc_m - orc_s, orc_m + orc_s, color="black", alpha=0.10)
-    ax.plot(xs, orc_m, "k--o", label="Oracle-MLP (full data)", markersize=7)
-    ax.fill_between(xs, ipw_fm - ipw_fs, ipw_fm + ipw_fs, color="tab:blue", alpha=0.15)
-    ax.plot(xs, ipw_fm, "b-s", label="IPW-MLP (1/$\\hat\\pi$)", markersize=7)
-    ax.fill_between(xs, erm_fm - erm_fs, erm_fm + erm_fs, color="tab:red", alpha=0.15)
-    ax.plot(xs, erm_fm, "r-^", label="ERM-MLP (zero-imputed train)", markersize=7)
-    ax.set_xlabel("Expensive-modality ($x_2$) signal strength $s$")
-    ax.set_title("(b) Matched deployment\n(every model sees full test $x_2$)")
-    ax.legend(loc="lower left")
+    panels = [
+        ('full', "(a) Full-feature evaluation\n(expensive modality present at test)"),
+        ('dep',  "(b) Deployment evaluation\n(expensive modality never acquired at test)"),
+    ]
+    for ax, (evalkind, title) in zip(axes, panels):
+        orc_m, orc_s = arr(None, 'Oracle', evalkind, 'mean'), arr(None, 'Oracle', evalkind, 'std')
+        ipw_m, ipw_s = arr(None, 'IPW', evalkind, 'mean'), arr(None, 'IPW', evalkind, 'std')
+        erm_m, erm_s = arr(None, 'ERM_zero', evalkind, 'mean'), arr(None, 'ERM_zero', evalkind, 'std')
+        cc_m         = arr(None, 'CC_ERM', evalkind, 'mean')
 
-    fig.suptitle("Deep higher-dimensional fusion: full-feature vs. deployment AUC",
+        ax.fill_between(xs, orc_m - orc_s, orc_m + orc_s, color="black", alpha=0.10)
+        ax.plot(xs, orc_m, "k--o", label="Oracle (full data)", markersize=7)
+        ax.fill_between(xs, ipw_m - ipw_s, ipw_m + ipw_s, color="tab:blue", alpha=0.15)
+        ax.plot(xs, ipw_m, "b-s", label="IPW-ERM (1/$\\hat\\pi$)", markersize=7)
+        ax.fill_between(xs, erm_m - erm_s, erm_m + erm_s, color="tab:red", alpha=0.15)
+        ax.plot(xs, erm_m, "r-^", label="Zero-imputed ERM", markersize=7)
+        # CC-ERM ablation (full-feature panel, where the paper discusses it).
+        if evalkind == 'full':
+            ax.plot(xs, cc_m, color="tab:green", marker="d", linestyle=":",
+                    label="CC-ERM (complete-case)", markersize=7)
+        ax.set_xlabel("Expensive-modality ($x_2$) signal strength $s$")
+        ax.set_ylabel("Accuracy ($\\times 100$)")
+        ax.set_title(title)
+        ax.legend(loc="upper right" if evalkind == 'full' else "lower left")
+
+    fig.suptitle("Deep higher-dimensional fusion (MLP, hidden $32$, $d_2{=}12$): "
+                 "full-feature vs. deployment performance",
                  fontsize=13, y=1.02)
     fig.tight_layout()
     out_pdf = FIG_DIR / f"{EXP_ID}.pdf"
@@ -406,52 +379,13 @@ def main():
     print(f"\nSaved figure: {out_pdf}")
     print(f"Saved figure: {out_png}")
 
-    # ── JSON dump ───────────────────────────────────────────────────────
-    payload = dict(
-        id=EXP_ID,
-        description="Deep, higher-dimensional fusion showing the IPW "
-                    "correction matters. 2-layer ReLU MLP fusion model; "
-                    "cheap x1 in R^d1 always observed, expensive x2 in R^d2 "
-                    "gated by a cheap-modality policy and carrying nonlinear "
-                    "signal; deployment-time rank-AUC with off-policy "
-                    "zero-imputation; sweep over x2 signal strength.",
-        seed=SEED,
-        settings=dict(
-            n_trials=N_TRIALS, N_train=N_TRAIN, N_test=N_TEST,
-            d1_cheap=D1, d2_expensive=D2, selectivity=SELECTIVITY,
-            pi_min=PI_MIN, signal_grid=SIGNAL_GRID,
-            mlp_hidden=MLP_HIDDEN, mlp_iters=MLP_ITERS, mlp_lr=MLP_LR,
-            mlp_l2=MLP_L2, metric="rank_based_AUC_deployment_zero_imputed",
-        ),
-        results_by_signal={str(s): results[s] for s in SIGNAL_GRID},
-        claim_check=dict(
-            erm_gap_to_oracle_by_signal=erm_gaps,
-            ipw_gap_to_oracle_by_signal=ipw_gaps,
-            ipw_recovery_over_erm_by_signal=recoveries,
-            erm_degrades_with_signal=bool(erm_degrades),
-            ipw_recovers_toward_oracle=bool(ipw_recovers),
-            supports_claim=bool(supports),
-        ),
-        diagnostic_full_x2_deploy=dict(
-            note="Every model evaluated on FULL test x2 (matched deployment); "
-                 "isolates the train/deploy distribution-mismatch confound of "
-                 "the off-policy zero-imputed primary metric.",
-            erm_full_gap_to_oracle_by_signal=erm_gaps_f,
-            ipw_full_gap_to_oracle_by_signal=ipw_gaps_f,
-            ipw_full_recovery_over_erm_by_signal=recoveries_f,
-            erm_full_degrades_with_signal=bool(erm_degrades_f),
-            ipw_full_recovers_toward_oracle=bool(ipw_recovers_f),
-            supports_claim_full=bool(supports_f),
-        ),
-    )
+    # ----------------------- JSON dump -----------------------
     out_json = RESULTS_DIR / f"{EXP_ID}.json"
     with open(out_json, "w") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(out, f, indent=2)
     print(f"Saved JSON: {out_json}")
-    print(f"\nFINAL PRIMARY supportsClaim = {supports}  | "
-          f"DIAGNOSTIC(full-x2) supportsClaim = {supports_f}")
-    return payload
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    np.random.seed(SEED)
     main()

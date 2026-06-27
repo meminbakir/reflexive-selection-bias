@@ -209,7 +209,7 @@ def main():
         print(f"kappa={kappa}: AUC gap to interaction-aware oracle  "
               f"DIME {np.mean(gap_dime):.3f}  ERM {np.mean(gap_erm):.3f}")
 
-    # verdict
+    # summary
     b_indep = results[f"{RHOS[0]}"]
     dime_recovers_indep = b_indep["bias_dime_mean"] < 0.5 * b_indep["bias_erm_mean"]
     dime_better_than_erm = all(results[f"{r}"]["bias_dime_mean"] <
@@ -222,7 +222,7 @@ def main():
                      "n_test": N_TEST, "n_trials": N_TRIALS, "rhos": RHOS, "seed": SEED},
         "results_by_rho": results,
         "results_by_kappa": kappa_results,
-        "verdict": {
+        "summary": {
             "dime_recovers_beta_under_independent_acq": bool(dime_recovers_indep),
             "dime_beats_erm_on_coef_at_all_rho": bool(dime_better_than_erm),
             "dime_bias_increase_indep_to_max_rho": float(degr),
@@ -262,7 +262,7 @@ def main():
     os.makedirs(FIG_DIR, exist_ok=True)
     fig.savefig(os.path.join(FIG_DIR, "dependent_acquisition.pdf"), bbox_inches="tight")
     fig.savefig(os.path.join(FIG_DIR, "dependent_acquisition.png"), dpi=200, bbox_inches="tight")
-    print("\nverdict:", json.dumps(out["verdict"], indent=2))
+    print("\nsummary:", json.dumps(out["summary"], indent=2))
     print("saved:", OUT_JSON)
 
 

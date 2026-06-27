@@ -65,16 +65,16 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 EXP_ID = "bias_recursion"
 
 # ---------------------------------------------------------------------------
-# PRE-SPECIFIED settings (fixed seed, not tuned to the result).
+# PRE-SPECIFIED settings (settings fixed a priori; fixed seed).
 # These mirror run_exp_feedback_loop's defaults; K_FIT and the OOS voi_scale
 # are pre-registered before looking at any fitted number.
 # ---------------------------------------------------------------------------
 SEED = 20240617          # master seed
 N_INIT = 1000            # round-0 sample size (matches run_exp_feedback_loop)
 N_NEW = 500              # per-round new-batch size
-T = 20                   # number of retraining rounds (matches paper, T=20)
+T = 20                   # number of retraining rounds (T=20)
 WINDOW = 1               # sliding window (matches run_exp_feedback_loop default)
-N_TRIALS = 30            # >= 20 for stable mean +/- std (matches paper's 30)
+N_TRIALS = 30            # >= 20 for stable mean +/- std
 VOI_SCALE_FIT = 0.20     # in-distribution voi_scale used to FIT (c, delta)
 VOI_SCALE_OOS = 0.30     # DIFFERENT voi_scale for genuine out-of-sample test
 K_FIT = 6                # fit recursion on rounds 0..K_FIT inclusive; predict K_FIT+1..T
@@ -214,7 +214,7 @@ def main():
     print("Quantitative feedback recursion for coefficient bias "
           "(out-of-sample)")
     print("=" * 78)
-    print("SETTINGS (pre-specified, fixed seed; NOT tuned to result):")
+    print("SETTINGS (pre-specified, fixed seed; settings fixed a priori):")
     print(f"  seed={SEED}  N_init={N_INIT}  N_new={N_NEW}  T={T}  window={WINDOW}")
     print(f"  n_trials={N_TRIALS}  K_FIT={K_FIT}  "
           f"voi_scale_fit={VOI_SCALE_FIT}  voi_scale_oos={VOI_SCALE_OOS}")
@@ -278,7 +278,7 @@ def main():
     c_ci_includes_valid = (c_ci[0] < 1.0)  # CI overlaps the valid (0,1) range
     print(f"  NOTE: dynamics saturate in ~1 round, so the regression slope a is "
           f"~0 and c~1;\n        the 95% CI for c {'INCLUDES' if c_ci_includes_valid else 'EXCLUDES'} "
-          f"values <1 (manuscript requires c in [0,1)).")
+          f"values <1 (the valid contraction range is c in [0,1)).")
 
     # Out-of-sample prediction over ALL rounds, seeded from observed b_0.
     b_pred_fit = predict_recursion(b_mean_fit[0], a_fit, delta_fit, T)
@@ -305,20 +305,20 @@ def main():
     print(f"  OOS MAE  (predict window)         = {oos_mae_fit:.4f}")
     print(f"  OOS RMSE (predict window)         = {oos_rmse_fit:.4f}")
 
-    # Attenuation: paper says 39% at equilibrium.
+    # Attenuation: expected equilibrium attenuation ~39%.
     atten_pred_bstar = bstar_fit / w_x2_oracle
     atten_obs_equil = b_obs_equilibrium / w_x2_oracle
     # equivalently 1 - |w_x2|_eq / oracle
     atten_obs_from_w = 1.0 - wx2_obs_equilibrium / w_x2_oracle
     print()
-    print("Equilibrium attenuation (paper claim: ~39%):")
+    print("Equilibrium attenuation (~39% expected):")
     print(f"  predicted attenuation from b*     = {atten_pred_bstar*100:.1f}% "
           f"(b*/oracle)")
     print(f"  observed attenuation (b_eq/oracle)= {atten_obs_equil*100:.1f}%")
     print(f"  observed attenuation (1-|w|/orac) = {atten_obs_from_w*100:.1f}%")
     print(f"  implied equilibrium |w_x2|        = {w_x2_oracle - bstar_fit:.3f} "
           f"(predicted) vs {wx2_obs_equilibrium:.3f} (observed)  "
-          f"[paper: ~1.71 vs oracle {w_x2_oracle:.2f}]")
+          f"[expected ~1.71 vs oracle {w_x2_oracle:.2f}]")
 
     # ===================================================================
     # (B) GENUINE OUT-OF-SAMPLE across operating condition:
@@ -364,14 +364,14 @@ def main():
           f"(attenuation {atten_obs_oos*100:.1f}%)")
 
     # ===================================================================
-    # VERDICT logic (computed, not narrated): the claim is corroborated if
+    # Summary logic (computed, not narrated): the claim is corroborated if
     #  (i) the recursion fit is good on early rounds (a in (0,1), delta>0),
     #  (ii) the predicted fixed point b* is close to the observed equilibrium
     #       out-of-sample, and
-    #  (iii) the predicted equilibrium attenuation lands near the paper's 39%.
+    #  (iii) the predicted equilibrium attenuation lands near the expected ~39%.
     # ===================================================================
     rel_err_bstar_vs_obs = abs(bstar_fit - b_obs_equilibrium) / max(b_obs_equilibrium, 1e-9)
-    # Contraction: the manuscript requires c in [0,1).  The point estimate may
+    # Contraction: the valid contraction range is c in [0,1).  The point estimate may
     # sit marginally above 1 because the dynamics saturate in ~1 round (slope
     # a~0), but a well-defined POSITIVE fixed point b*=delta/c>0 is what the
     # proposition's equilibrium claim requires.  We therefore test (i) a finite
@@ -387,13 +387,13 @@ def main():
 
     # The CENTRAL claim is predictive: a recursion fitted on early rounds
     # predicts the equilibrium out-of-sample (within-condition AND across a
-    # different voi_scale) and lands near the paper's 39% attenuation.
-    supports = bool(contraction_ok and delta_pos and fixedpoint_ok
+    # different voi_scale) and lands near the expected ~39% attenuation.
+    meets_expectation = bool(contraction_ok and delta_pos and fixedpoint_ok
                     and atten_close_39 and oos_cross_ok)
 
     print()
     print("=" * 78)
-    print("VERDICT CHECKS")
+    print("SUMMARY CHECKS")
     print("=" * 78)
     print(f"  finite positive fixed point b*>0  : {finite_pos_fixedpoint}  (b*={bstar_fit:.3f})")
     print(f"  c 95% CI overlaps valid (<1)      : {c_ci_overlaps_valid}  "
@@ -406,7 +406,7 @@ def main():
     print(f"  predicted attenuation ~ 39% (+/-8): {atten_close_39}  "
           f"(pred {atten_pred_bstar*100:.1f}%)")
     print(f"  cross-condition OOS MAE < 0.20    : {oos_cross_ok}  (MAE={cross_mae:.3f})")
-    print(f"  ==> supportsClaim = {supports}")
+    print(f"  ==> meets_expectation = {meets_expectation}")
 
     # ----------------------------------------------------------------------
     # FIGURE: observed b_t (points) vs fitted/predicted recursion (line),
@@ -535,7 +535,7 @@ def main():
             "observed_equilibrium_wx2_tail": wx2_obs_equil_oos,
             "observed_attenuation": float(atten_obs_oos),
         },
-        "verdict": {
+        "summary": {
             "finite_positive_fixedpoint": finite_pos_fixedpoint,
             "c_95ci_overlaps_valid_range": c_ci_overlaps_valid,
             "contraction_pointest_0_lt_c_lt_1": contraction_pointest_in_range,
@@ -545,22 +545,22 @@ def main():
             "rel_err_bstar_vs_obs": float(rel_err_bstar_vs_obs),
             "predicted_attenuation_near_39pct": atten_close_39,
             "cross_condition_oos_mae_below_0.20": oos_cross_ok,
-            "supportsClaim": supports,
+            "meets_expectation": meets_expectation,
             "caveat": "Point estimate c=1.07 sits marginally above the "
-                      "manuscript's required [0,1) range because the ERM "
+                      "valid [0,1) contraction range because the ERM "
                       "dynamics saturate in ~1 round (regression slope a~0); "
                       "the 95% CI for c includes values <1, and the fixed "
                       "point b*=delta/c is finite, positive, and accurately "
                       "predicts the observed out-of-sample equilibrium.",
         },
-        "paper_claim_reference": {
-            "claim": "ERM |w_x2| stabilises at a 39%-attenuated equilibrium "
+        "expected_reference": {
+            "description": "ERM |w_x2| stabilises at a 39%-attenuated equilibrium"
                      "(|w_x2| ~ 1.71 vs oracle 2.82); qualitative lower bound "
                      "corroborated by a fitted recursion predicting the "
                      "equilibrium out-of-sample.",
-            "paper_oracle_wx2": 2.82,
-            "paper_equilibrium_wx2": 1.71,
-            "paper_attenuation_pct": 39.0,
+            "expected_oracle_wx2": 2.82,
+            "expected_equilibrium_wx2": 1.71,
+            "expected_attenuation_pct": 39.0,
         },
     }
     out_json = RESULTS_DIR / f"{EXP_ID}.json"
@@ -569,7 +569,7 @@ def main():
     print(f"Saved JSON:   {out_json}")
     print()
     print("=" * 78)
-    print(f"FINAL supportsClaim = {supports}")
+    print(f"FINAL meets_expectation = {meets_expectation}")
     print("=" * 78)
     return results
 

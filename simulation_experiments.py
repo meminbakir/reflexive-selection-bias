@@ -468,7 +468,7 @@ def run_exp2(N_scatter=800, selectivity=2.5):
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 4.5), sharey=True)
 
-    titles = ['(a) Oracle (full data)', '(b) ERM (biased)', '(c) IPW-DTF (ours)']
+    titles = ['(a) Oracle (full data)', '(b) ERM (biased)', '(c) CC-IPW (ours)']
     weights_list = [w_oracle, w_erm, w_ipw]
     colors = ['black', 'red', 'blue']
 
@@ -707,7 +707,7 @@ def run_exp4(selectivity=2.5, N_test=5000):
                     ipw_means - ipw_stds, ipw_means + ipw_stds,
                     alpha=0.2, color='blue')
     ax.plot(sample_sizes, ipw_means, 'b-s', markersize=7,
-            label='IPW-DTF (ours)')
+            label='CC-IPW (ours)')
 
     ax.set_xscale('log')
     ax.set_xlabel('Training Set Size N (log scale)')
@@ -1178,7 +1178,7 @@ def run_exp7_semisynthetic(csv_path=None, lam=3.0, n_trials=20, seed=0,
     ax2.grid(axis='y', alpha=0.3)
 
     fig.suptitle(
-        f'Exp 7: Semi-Synthetic Heart Disease (UCI Cleveland)\n'
+        f'Exp 8: Semi-Synthetic Heart Disease (UCI Cleveland)\n'
         f'$\\lambda={lam}$, {n_trials} trials, $N_{{\\rm synth}}={N_synth}$',
         fontsize=11, y=1.02
     )

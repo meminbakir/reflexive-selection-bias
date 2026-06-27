@@ -55,7 +55,7 @@ FIG_PNG = str(FIG_DIR / "reflexive_sweep.png")
 JSON_OUT = str(RESULTS_DIR / "reflexive_sweep.json")
 
 # ---------------------------------------------------------------------------
-# Pre-specified settings (FIXED; not tuned to a favorable outcome)
+# Pre-specified settings (fixed seed)
 # ---------------------------------------------------------------------------
 SEED = 20240613               # fixed master seed
 N_TRAIN = 3000                # matches run_exp5 default
@@ -295,7 +295,7 @@ def main():
     print(f"  CC-IPW < 0.5*ERM ? {abs_bias['CC-IPW'] < 0.5*erm_bias}  "
           f"DIME < 0.5*ERM ? {abs_bias['DIME'] < 0.5*erm_bias}")
     print(f"  CC-ERM stays biased (>0.5*ERM) ? {abs_bias['CC-ERM'] > 0.5*erm_bias}")
-    print(f"\n  >>> supportsClaim = {supports}")
+    print(f"\n  >>> meets_expectation = {supports}")
 
     # -------------------------------------------------------------------
     # Figure: bias and accuracy vs scan noise (main selectivity).
@@ -386,7 +386,7 @@ def main():
         },
         "mean_abs_coef_bias_main_selectivity": abs_bias,
         "erm_bias_yardstick": float(erm_bias),
-        "supportsClaim": supports,
+        "meets_expectation": supports,
         "figure_pdf": FIG_PDF, "figure_png": FIG_PNG, "json": JSON_OUT,
     }
     with open(JSON_OUT, "w") as f:

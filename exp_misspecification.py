@@ -56,7 +56,7 @@ import matplotlib.pyplot as plt
 
 import simulation_experiments as S
 
-# ─── Pre-specified settings (FIXED; not tuned to the result) ────────────────
+# ─── Pre-specified settings (FIXED; settings fixed a priori; fixed seed) ────────────────
 SEED          = 20240613
 N_TRAIN       = 3000
 N_TEST        = 5000
@@ -331,7 +331,7 @@ def run():
               f"{am*100:>8.2f}+/-{as_*100:<4.2f} {um:>8.4f}+/-{us:<6.4f}")
 
     print("-" * 72)
-    # Honest interpretation: how much bias is removed vs ERM, and how much
+    # Interpretation: how much bias is removed vs ERM, and how much
     # CC-IPW/DIME LOSE under misspecification.
     erm_bias = bias_means['ERM']
     ipw_c_bias = bias_means['CC-IPW(correct)']
