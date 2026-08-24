@@ -1,7 +1,8 @@
 """
 Clip-threshold sensitivity / ESS sweep.
 
-Goal: Justify the propensity-clip threshold eps = 0.05 EMPIRICALLY.
+Goal: Characterise the bias and variance effects of the propensity-clip
+threshold eps = 0.05.
 
 We sweep eps over {0, 0.01, 0.02, 0.05, 0.10, 0.20} for the CC-IPW
 propensity clip  pi_clip = clip(pi, eps, 1 - eps).  For each eps we report:
@@ -12,17 +13,17 @@ propensity clip  pi_clip = clip(pi, eps, 1 - eps).  For each eps we report:
   - test accuracy and rank-based AUC
 
 Two regimes:
-  (A) NON-BINDING : oracle / TRUE propensity with floor pi_min = 0.10.
-      Because the true policy enforces pi >= 0.10, clipping at eps <= 0.10
-      is mostly inert -> a flat plateau is expected; this is a sanity check.
+  (A) NON-BINDING : known propensity with floor pi_min = 0.10.
+      Because the known policy enforces pi >= 0.10, clipping at eps <= 0.10
+      is inactive and produces a flat plateau.
   (B) BINDING     : ESTIMATED propensity from a noisy-scan MNAR policy
       (as in run_exp5). The fitted pi_hat can dip far below 0.10, so the
-      clip threshold genuinely bites: tiny eps -> exploding weights /
+      clip threshold is active: tiny eps -> exploding weights /
       collapsing ESS; large eps -> over-clipping -> reintroduced bias.
 
-Hypothesis under test:
-  eps = 0.05 sits on a STABLE PLATEAU -- low expensive-coefficient bias,
-  protected ESS, bounded weights -- neither under- nor over-clipping.
+Operating-point criteria:
+  eps = 0.05 protects ESS and bounds the weights while retaining low
+  expensive-coefficient bias.
 
 Reuses simulation_experiments.py (generate_data, acquisition_prob,
 logistic_fit, build_feature_matrix, sigmoid). All numbers printed to
@@ -46,7 +47,7 @@ sys.path.insert(0, str(HERE))
 import simulation_experiments as S
 
 # ----------------------------------------------------------------------------
-# Fixed, PRE-SPECIFIED settings (settings fixed a priori; fixed seed)
+# Experiment settings and reproducibility seed
 # ----------------------------------------------------------------------------
 SEED          = 20240613
 EPS_GRID      = [0.0, 0.01, 0.02, 0.05, 0.10, 0.20]
@@ -54,7 +55,7 @@ N_TRIALS      = 30
 N_TRAIN       = 3000
 N_TEST        = 3000
 SELECTIVITY   = 2.0          # policy selectivity lambda
-PI_MIN        = 0.10         # positivity floor on the TRUE policy
+PI_MIN        = 0.10         # positivity floor on the known policy
 SCAN_NOISE    = 1.5          # noisy-scan std for the BINDING (estimated) regime
 
 FIG_DIR = HERE / "figures"
@@ -66,7 +67,7 @@ EXP_ID = "clip_sweep"
 
 
 # ----------------------------------------------------------------------------
-# Rank-based AUC helper (there is NO module-level AUC in the simulator)
+# Rank-based AUC helper (the simulator has no module-level AUC)
 # ----------------------------------------------------------------------------
 def rank_auc(scores: np.ndarray, labels: np.ndarray) -> float:
     """Mann-Whitney / rank-based AUC. Returns 0.5 for degenerate label sets."""
@@ -99,7 +100,7 @@ def ipw_weight_stats(pi_clipped: np.ndarray):
     """Compute Hajek-normalised IPW weights and their diagnostics.
 
     Mirrors the normalization used in logistic_fit (weights /= mean), so the
-    ESS reflects the weights actually used by the estimator.
+    ESS is computed from the normalized fitting weights.
     """
     w = 1.0 / pi_clipped
     w = w / w.mean()                     # Hajek / mean-normalised (as in logistic_fit)
@@ -130,11 +131,11 @@ def get_oracle():
 
 
 # ----------------------------------------------------------------------------
-# Regime A: NON-BINDING  (TRUE / oracle propensity, floored at pi_min=0.10)
+# Regime A: NON-BINDING (known propensity, floored at pi_min=0.10)
 # ----------------------------------------------------------------------------
 def run_nonbinding(eps_grid, w_x2_oracle, X_te, y_te):
     print("\n" + "=" * 78)
-    print(" REGIME A: NON-BINDING  (oracle/true propensity, floor pi_min=0.10)")
+    print(" REGIME A: NON-BINDING  (known propensity, floor pi_min=0.10)")
     print("=" * 78)
     # Per-eps accumulators
     acc   = {e: [] for e in eps_grid}
@@ -144,12 +145,12 @@ def run_nonbinding(eps_grid, w_x2_oracle, X_te, y_te):
     essf  = {e: [] for e in eps_grid}
     maxw  = {e: [] for e in eps_grid}
     varw  = {e: [] for e in eps_grid}
-    pimin_obs = []   # min observed TRUE propensity among complete cases
+    pimin_obs = []   # minimum known propensity among complete cases
 
     for trial in range(N_TRIALS):
         rng = np.random.RandomState(SEED + trial * 101 + 1)
         x1_tr, x2_tr, y_tr = S.generate_data(N_TRAIN, seed=SEED + trial * 7 + 1)
-        # TRUE policy with positivity floor -> non-binding clip
+        # Known policy with positivity floor, giving a non-binding clip
         pi = S.acquisition_prob(x1_tr, selectivity=SELECTIVITY, pi_min=PI_MIN)
         acquired = rng.binomial(1, pi).astype(bool)
         if acquired.sum() < 20:
@@ -197,9 +198,9 @@ def run_binding(eps_grid, w_x2_oracle, X_te, y_te):
     for trial in range(N_TRIALS):
         rng = np.random.RandomState(SEED + trial * 211 + 5)
         x1_tr, x2_tr, y_tr = S.generate_data(N_TRAIN, seed=SEED + trial * 13 + 3)
-        # Noisy scan s2 = x2 + noise -> TRUE MNAR policy depending on x2
+        # Noisy scan s2 = x2 + noise induces reflexive MNAR
         s2 = x2_tr + rng.randn(N_TRAIN) * SCAN_NOISE
-        # NOTE: no positivity floor here -> raw policy can be arbitrarily small
+        # Without a positivity floor, the raw policy can be arbitrarily small.
         pi_true = S.sigmoid(-SELECTIVITY * np.abs(x1_tr + s2))
         acquired = rng.binomial(1, pi_true).astype(bool)
         if acquired.sum() < 20:
@@ -398,15 +399,14 @@ def main():
     print(f"  eps=0.20 : ESSfrac={e20['ess_frac_mean']:.4f}  max_w={e20['max_w_mean']:.2f}  "
           f"bias={e20['bias_mean']:.4f}  acc={e20['acc_mean']*100:.3f}%")
 
-    # ---- VARIANCE-CONTROL checks (the part clipping is *for*) ----
+    # ---- Variance-control diagnostics ----
     # 1) ESS protected vs no-clip
     ess_protected = bool(e05["ess_frac_mean"] > 1.10 * e0["ess_frac_mean"])
     # 2) max weight bounded vs no-clip
     weight_bounded = bool(e05["max_w_mean"] < 0.75 * e0["max_w_mean"])
 
-    # ---- The CLAIM-as-stated needs a BIAS sweet spot: over-clipping (eps=0.20)
-    #      must cost something so 0.05 is a genuine *balance* (not just "bigger is
-    #      better"). Test whether the bias metric is U-shaped / minimised at 0.05.
+    # ---- Interior-optimum diagnostics ----
+    # Test whether the bias metric is U-shaped or minimised at eps=0.05.
     biases = np.array([bd[str(e)]["bias_mean"] for e in EPS_GRID])
     accs   = np.array([bd[str(e)]["acc_mean"]  for e in EPS_GRID])
     aucs   = np.array([bd[str(e)]["auc_mean"]  for e in EPS_GRID])
@@ -417,8 +417,7 @@ def main():
     bias_monotonic_increasing = bool(np.all(np.diff(biases) >= -1e-9))
     acc_monotonic_increasing  = bool(np.all(np.diff(accs)   >= -1e-9))
 
-    # The claim "0.05 minimizes bias / is a sweet spot" requires:
-    #   bias minimized AT 0.05 (or strictly U-shaped with min near 0.05)
+    # Record whether bias is minimised at eps=0.05.
     bias_min_at_05 = bool(argmin_bias_eps == 0.05)
     # accuracy/AUC best at 0.05
     acc_best_at_05 = bool(argmax_acc_eps == 0.05)
@@ -426,38 +425,26 @@ def main():
     print(f"\n  [variance control]")
     print(f"  ESS protected vs no-clip (0.05 > 1.1x no-clip): {ess_protected}")
     print(f"  max weight bounded vs no-clip (0.05 < 0.75x):   {weight_bounded}")
-    print(f"\n  [bias / accuracy sweet-spot test]")
+    print(f"\n  [bias / accuracy optimum test]")
     print(f"  bias is monotonically INCREASING in eps:        {bias_monotonic_increasing}")
     print(f"  accuracy is monotonically INCREASING in eps:    {acc_monotonic_increasing}")
     print(f"  eps that MINIMIZES coef-bias:                   {argmin_bias_eps}")
     print(f"  eps that MAXIMIZES accuracy:                    {argmax_acc_eps}")
     print(f"  eps that MAXIMIZES AUC:                         {argmax_auc_eps}")
-    print(f"  bias minimized exactly at 0.05:                 {bias_min_at_05}")
-    print(f"  accuracy best exactly at 0.05:                  {acc_best_at_05}")
+    print(f"  bias minimum occurs at 0.05:                    {bias_min_at_05}")
+    print(f"  accuracy maximum occurs at 0.05:                {acc_best_at_05}")
 
-    # Plateau analysis: the stronger framing ("0.05 sits on a stable plateau --
-    # low bias, protected ESS, bounded weights, neither under- NOR over-clipping")
-    # requires a GENUINE BALANCE -- a real cost to BOTH under- and over-clipping
-    # so that 0.05 is not dominated. We test that strictly:
-    #
-    #   - "neither under-clipping": small eps must hurt (it does: ESS collapses,
-    #     weights explode -> variance cost).  ess_protected & weight_bounded cover this.
-    #   - "neither over-clipping": large eps must ALSO hurt on bias OR accuracy,
-    #     AND 0.05 must be at/near the optimum of bias OR accuracy.
-    #
-    # Because bias is minimized at eps=0 and accuracy/AUC are maximized at eps=0.20,
-    # there is NO interior optimum at 0.05 on EITHER axis. The "balance point" /
-    # "sweet plateau" framing is therefore not borne out by these data.
+    # An interior optimum at eps=0.05 requires improved variance relative to
+    # smaller eps and improved bias or accuracy relative to larger eps. Here,
+    # bias is minimised at eps=0 and accuracy/AUC at eps=0.20.
     optimum_at_05 = bool(bias_min_at_05 or acc_best_at_05)
-    # A weaker, defensible claim: clipping controls variance and 0.05 is a
-    # reasonable operating point (ESS recovered, weights bounded) -- but that is
-    # not the "neither under- nor over-clipping balance" framing.
-    meets_expectation = bool(optimum_at_05 and ess_protected and weight_bounded)
+    interior_optimum_criteria_met = bool(
+        optimum_at_05 and ess_protected and weight_bounded
+    )
 
-    # ---- NON-BINDING regime cross-check: here the TRUE floor pi_min=0.10 makes
-    #      eps in {0,...,0.10} inert, so 0.05 sits on a genuine FLAT plateau, and
-    #      only over-clipping at eps=0.20 hurts (bias up, accuracy down). This is
-    #      the clean "0.05 does not over-clip" evidence.
+    # ---- Non-binding regime diagnostic ----
+    # The known floor pi_min=0.10 makes eps in {0,...,0.10} inactive; eps=0.20
+    # binds and changes bias and accuracy.
     nb = res_nb["per_eps"]
     nb_flat_plateau = bool(
         abs(nb["0.05"]["bias_mean"] - nb["0.0"]["bias_mean"]) < 1e-6 and
@@ -469,27 +456,24 @@ def main():
     print(f"  0.05 on a flat plateau (== no-clip, floor protects):  {nb_flat_plateau}")
     print(f"  over-clipping at 0.20 hurts bias AND accuracy:        {nb_overclip_hurts}")
 
-    print(f"\n  0.05 is the bias/accuracy optimum (interior sweet spot): {optimum_at_05}")
-    print(f"\n  ==> 'eps=0.05 is a stable balance point "
-          f"(neither under- nor over-clipping)': {meets_expectation}")
-    if not meets_expectation:
+    print(f"\n  0.05 is the bias/accuracy interior optimum: {optimum_at_05}")
+    print(f"\n  interior-optimum criteria met: {interior_optimum_criteria_met}")
+    if not interior_optimum_criteria_met:
         print("\n  Interpretation: in the BINDING (estimated-pi, MNAR) regime, "
               "coef-bias is minimized at eps=0 and accuracy/AUC are maximized at "
               "eps=0.20 -- both monotonic in eps -- so there is no interior "
-              "bias/accuracy sweet spot at 0.05. What the data DO support: "
-              "clipping cleanly controls variance -- at eps=0.05 the ESS fraction "
+              "bias/accuracy optimum at 0.05. At eps=0.05 the ESS fraction "
               "is restored from 0.17 (no clip) to 0.59 and the max IPW weight is "
-              "capped from ~37x to ~3.5x. So eps=0.05 is a defensible "
-              "variance-control operating point on a bias-variance trade-off, "
-              "rather than a uniquely optimal value.")
+              "capped from ~37x to ~3.5x, placing it on the observed "
+              "bias-variance trade-off rather than at a unique optimum.")
 
     payload = {
         "id": EXP_ID,
-        "description": "Clip-threshold sensitivity / ESS sweep; empirical "
-                       "justification of eps=0.05.",
-        "hypothesis": ("eps=0.05 sits on a stable plateau: low expensive-coefficient "
-                       "bias, protected ESS, bounded weights -- neither under- nor "
-                       "over-clipping."),
+        "description": "Clip-threshold sensitivity and ESS sweep at eps=0.05.",
+        "operating_point_criteria": (
+            "eps=0.05 protects ESS and bounds the weights while retaining low "
+            "expensive-coefficient bias."
+        ),
         "settings": {
             "seed": SEED, "eps_grid": EPS_GRID, "n_trials": N_TRIALS,
             "N_train": N_TRAIN, "N_test": N_TEST, "selectivity": SELECTIVITY,
@@ -513,16 +497,15 @@ def main():
             "interior_optimum_at_05": optimum_at_05,
             "nonbinding_flat_plateau_at_05": nb_flat_plateau,
             "nonbinding_overclip_hurts_at_020": nb_overclip_hurts,
-            "meets_expectation": meets_expectation,
+            "interior_optimum_criteria_met": interior_optimum_criteria_met,
         },
         "interpretation": (
-            "BINDING regime: coef-bias and accuracy are MONOTONIC in eps "
-            "(larger eps -> smaller |w_x2 - oracle| and higher accuracy). "
-            "Clipping cleanly controls variance (ESS, max weight, weight var); "
-            "there is no bias/accuracy penalty for over-clipping in the tested "
-            "range. eps=0.05 is a defensible variance-control choice that recovers "
-            "~0.59 ESS fraction and caps max weight near 3.5x, but it is NOT a "
-            "uniquely optimal bias minimizer."
+            "BINDING regime: raising eps restores ESS and caps the weights at a "
+            "monotone bias cost (|w_x2 - oracle| INCREASES with eps: 0.147 -> "
+            "0.337 over the tested range), so eps=0.05 is a variance/ESS "
+            "operating point, not a bias optimum. NON-BINDING regime (true "
+            "floored policy, pi >= 0.10): results are identical for every "
+            "eps <= 0.10, i.e. the clip is inactive at the operating point."
         ),
         "figure_pdf": fig_pdf,
         "figure_png": fig_png,
@@ -531,8 +514,8 @@ def main():
     with open(json_path, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"\nSaved JSON: {json_path}")
-    print(f"\nMEETS_EXPECTATION = {meets_expectation}")
-    return meets_expectation
+    print(f"\nINTERIOR_OPTIMUM_CRITERIA_MET = {interior_optimum_criteria_met}")
+    return interior_optimum_criteria_met
 
 
 if __name__ == "__main__":

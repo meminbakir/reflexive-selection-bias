@@ -19,13 +19,13 @@ becomes correlated.
         (marginals pi_j held EXACT for every rho)
 
 Methods (all logistic, same expensive-uplift parameterisation where relevant):
-    Oracle : full data        -> beta_oracle ~ beta_true (sanity check)
+    Oracle : full data        -> beta_oracle ~ beta_true (reference)
     ERM    : zero-imputed      -> beta biased toward 0
     DIME   : per-feature IPW   -> the method under test
 Metrics, swept over rho: mean_j |beta_j_hat - beta_true_j|  and test rank-AUC.
 
 A second arm holds acquisition independent and grows a cross-feature outcome
-interaction kappa to probe the genuine additive-log-odds limit of DIME.
+interaction kappa to probe the additive-log-odds limit of DIME.
 
 Run:  conda run -n veri_bilimi python exp_dependent_acquisition.py
 """
@@ -82,7 +82,7 @@ def make_data(rng, N, rho, kappa=0.0):
     x2 = rng.standard_normal((N, J))
     logit = W1_TRUE * x1 + x2 @ BETA_TRUE
     if kappa != 0.0:
-        # additivity violation: a cross-feature outcome interaction (the genuine
+        # additivity violation: a cross-feature outcome interaction (the
         # limit of DIME's additive-log-odds assumption, independent of acquisition).
         logit = logit + kappa * x2[:, 0] * x2[:, 1]
     y = (rng.uniform(size=N) < S.sigmoid(logit)).astype(float)
@@ -179,7 +179,7 @@ def main():
               f"DIME {rec['auc_dime_mean']:.3f} Oracle {rec['auc_oracle_mean']:.3f}")
 
     # ---- additivity-violation arm: independent acquisition, growing outcome interaction ----
-    # The genuine limit of DIME is a cross-feature outcome interaction (not correlated
+    # The limit of DIME is a cross-feature outcome interaction (not correlated
     # acquisition). We compare DIME / ERM to an INTERACTION-AWARE oracle (the correctly
     # specified full-data model) so the gap isolates the additive-log-odds limitation.
     KAPPAS = [0.0, 0.25, 0.5, 1.0]

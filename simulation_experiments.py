@@ -8,7 +8,7 @@ Experiments:
   Exp 2 — Decision Boundary Visualization: 2D scatter showing MNAR bias
   Exp 3 — Acquisition Efficiency Curve: accuracy vs. acquisition rate (λ sweep, same policy as Exp 1)
   Exp 4 — Convergence of IPW estimator: bias as a function of N (sample size)
-  Exp 5 — Reflexive MNAR: true MNAR via noisy scan policy + estimated propensity
+  Exp 5 — Reflexive MNAR: noisy scan policy + estimated propensity
 """
 
 import numpy as np
@@ -20,7 +20,7 @@ from pathlib import Path
 
 # ─── Setup ──────────────────────────────────────────────────────────────────
 np.random.seed(2024)
-FIG_DIR = Path(__file__).parent.parent / "figures"
+FIG_DIR = Path(__file__).parent / "figures"
 FIG_DIR.mkdir(exist_ok=True)
 
 plt.rcParams.update({
@@ -65,9 +65,9 @@ def acquisition_prob(x1, selectivity: float = 2.0, pi_min: float = 0.10):
     λ=0  → MCAR (uniform 0.5)
     λ→∞  → acquire only when x1 ≈ 0 (maximally uncertain about y|x1)
     π_min enforces positivity (every sample has non-zero acquisition chance),
-    which is required for IPW consistency (Theorem 1 in paper).
+    which is required for consistency of the inverse-propensity estimator.
 
-    This induces TRUE MNAR because x2 is bimodal at ±2:
+    This induces an MNAR mechanism because x2 is bimodal at ±2:
     - When |x1| >> 0, the policy rarely acquires x2
     - But 50% of non-acquired samples have x2 ≈ -2 (opposing x1's sign) → wrong predictions!
     - Zero-imputation (x2=0) is particularly damaging for opposing-sign samples
@@ -335,7 +335,7 @@ def run_exp1(N_train=2000, N_test=3000, n_trials=30):
             X_cc = build_feature_matrix(x1_tr[acquired], x2_tr[acquired])
             y_cc = y_tr[acquired]
 
-            # CC-ERM (ablation): complete cases only, NO propensity reweighting
+            # CC-ERM (ablation): complete cases only, without propensity reweighting
             # Identifies how much of the bias fix comes from CC selection alone
             w_cc_erm = logistic_fit(X_cc, y_cc)
             acc_cc_erm_all[sel].append(logistic_acc(X_full_te, y_te, w_cc_erm))
@@ -364,7 +364,7 @@ def run_exp1(N_train=2000, N_test=3000, n_trials=30):
 
     # Plot
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    sel_arr    = selectivities
+    sel_arr    = np.asarray(selectivities, dtype=float)
     erm_pct    = [a * 100 for a in acc_erm]
     cc_erm_pct = [a * 100 for a in acc_cc_erm]
     ipw_pct    = [a * 100 for a in acc_ipw]
@@ -373,50 +373,56 @@ def run_exp1(N_train=2000, N_test=3000, n_trials=30):
     ipw_s      = [a * 100 for a in acc_ipw_std]
     orc_pct    = acc_oracle * 100
 
+    # Offset the series and use capped error bars so their markers and
+    # uncertainty intervals remain distinguishable on the shared grid.
+    x_offset = 0.11 * float(sel_arr[1] - sel_arr[0])  # ~11% of the grid spacing
+    x_erm  = sel_arr - x_offset
+    x_cc   = sel_arr
+    x_ipw  = sel_arr + x_offset
+    mk     = dict(markersize=7, markeredgecolor='white', markeredgewidth=0.9,
+                  capsize=3.5, elinewidth=1.4, zorder=3)
+
     ax = axes[0]
     ax.axhline(orc_pct, color='black', ls='--', lw=2.5,
-               label=f'Oracle ({orc_pct:.1f}%)', zorder=3)
-    ax.fill_between(sel_arr,
-                    [e - s for e, s in zip(erm_pct, erm_s)],
-                    [e + s for e, s in zip(erm_pct, erm_s)],
-                    alpha=0.15, color='red')
-    ax.plot(sel_arr, erm_pct, 'r-o',
-            label='ERM (zero-imp.)', markersize=7, zorder=3)
-    ax.fill_between(sel_arr,
-                    [e - s for e, s in zip(cc_erm_pct, cc_erm_s)],
-                    [e + s for e, s in zip(cc_erm_pct, cc_erm_s)],
-                    alpha=0.15, color='darkorange')
-    ax.plot(sel_arr, cc_erm_pct, color='darkorange', marker='^', ls='-',
-            label='CC-ERM (ablation)', markersize=7, zorder=3)
-    ax.fill_between(sel_arr,
-                    [e - s for e, s in zip(ipw_pct, ipw_s)],
-                    [e + s for e, s in zip(ipw_pct, ipw_s)],
-                    alpha=0.15, color='blue')
-    ax.plot(sel_arr, ipw_pct, 'b-s',
-            label='CC-IPW (ours)', markersize=7, zorder=3)
+               label=f'Oracle ({orc_pct:.1f}%)', zorder=1)
+    ax.errorbar(x_erm, erm_pct, yerr=erm_s, color='red', marker='o', ls='-',
+                label='ERM (zero-imp.)', **mk)
+    ax.errorbar(x_cc, cc_erm_pct, yerr=cc_erm_s, color='darkorange',
+                marker='^', ls='-', label='CC-ERM (ablation)', **mk)
+    ax.errorbar(x_ipw, ipw_pct, yerr=ipw_s, color='blue', marker='s', ls='-',
+                label='CC-IPW (ours)', **mk)
     ax.set_xlabel('Policy Selectivity \u03bb')
     ax.set_ylabel('Test Accuracy (%)')
     ax.set_title(f'(a) Accuracy vs. Selectivity (mean \u00b1 std, {n_trials} trials)')
-    ax.legend(fontsize=8)
+    ax.set_xticks(sel_arr)
+    ax.legend(fontsize=8, loc='lower left', framealpha=0.95)
     ax.set_ylim([88, 100])
 
     ax = axes[1]
     bias_erm    = [e - orc_pct for e in erm_pct]
     bias_cc_erm = [e - orc_pct for e in cc_erm_pct]
     bias_ipw    = [i - orc_pct for i in ipw_pct]
-    ax.axhline(0, color='black', ls='--', lw=1.5, label='Oracle (no bias)')
-    ax.plot(sel_arr, bias_erm, 'r-o', label='ERM bias', markersize=7)
-    ax.plot(sel_arr, bias_cc_erm, color='darkorange', marker='^', ls='-',
-            label='CC-ERM residual bias', markersize=7)
-    ax.plot(sel_arr, bias_ipw, 'b-s', label='CC-IPW bias', markersize=7)
     ax.fill_between(sel_arr, bias_erm, bias_cc_erm, alpha=0.15, color='orange',
-                    label='CC removes imputation bias')
+                    label='CC removes imputation bias', zorder=0)
     ax.fill_between(sel_arr, bias_cc_erm, bias_ipw, alpha=0.3, color='green',
-                    label='IPW removes selection bias')
+                    label='IPW removes selection bias', zorder=0)
+    ax.axhline(0, color='black', ls='--', lw=1.5, label='Oracle (no bias)',
+               zorder=1)
+    ax.plot(x_erm, bias_erm, color='red', marker='o', ls='-',
+            label='ERM bias', markersize=7,
+            markeredgecolor='white', markeredgewidth=0.9, zorder=3)
+    ax.plot(x_cc, bias_cc_erm, color='darkorange', marker='^', ls='-',
+            label='CC-ERM residual bias', markersize=7,
+            markeredgecolor='white', markeredgewidth=0.9, zorder=3)
+    ax.plot(x_ipw, bias_ipw, color='blue', marker='s', ls='-',
+            label='CC-IPW bias', markersize=7,
+            markeredgecolor='white', markeredgewidth=0.9, zorder=3)
     ax.set_xlabel('Policy Selectivity \u03bb')
     ax.set_ylabel('Accuracy Gap vs. Oracle (%)')
     ax.set_title('(b) Bias Decomposition: Imputation vs. Selection')
-    ax.legend(fontsize=7)
+    ax.set_xticks(sel_arr)
+    ax.set_ylim([-3.0, 0.55])
+    ax.legend(fontsize=7, loc='lower center', ncol=3, framealpha=0.95)
 
     fig.tight_layout()
     out_pdf = FIG_DIR / "fig1_bias_vs_selectivity.pdf"
@@ -527,7 +533,7 @@ def run_exp2(N_scatter=800, selectivity=2.5):
 def run_exp3(N_train=2000, N_test=3000, n_lambda_points=10, n_trials=30):
     """Acquisition Efficiency: sweep λ to get different acquisition budgets.
 
-    Uses the SAME policy π(x1) = max(σ(-λ|x1|), 0.10) as Experiments 1,2,4.
+    Uses the same policy π(x1) = max(σ(-λ|x1|), 0.10) as Experiments 1,2,4.
     Compares: MCAR+CC-ERM (unbiased) vs Policy+ERM-imputed (biased) vs Policy+CC-IPW (ours).
     Runs n_trials per lambda value for confidence-interval shaded bands.
     """
@@ -727,10 +733,10 @@ def run_exp4(selectivity=2.5, N_test=5000):
 # ─── Experiment 5: Reflexive MNAR (noisy scan policy) ───────────────────────
 
 def run_exp5(N_train=3000, N_test=3000, selectivity=2.0, scan_noise=1.5, n_trials=30):
-    """True MNAR simulation via cheap preliminary scan.
+    """Reflexive MNAR simulation via a cheap preliminary scan.
 
     The acquisition policy uses a noisy scan s2 = x2 + noise as a preliminary proxy for x2.
-    Since s2 depends on x2, the missingness mechanism is TRUE MNAR:
+    Since s2 depends on x2, the missingness mechanism is MNAR:
       P(acquire | x1, x2, y) depends on x2 through s2.
 
     Under MNAR, the complete-case MLE is inconsistent. CC-IPW with ESTIMATED propensities
@@ -757,7 +763,7 @@ def run_exp5(N_train=3000, N_test=3000, selectivity=2.0, scan_noise=1.5, n_trial
         # Noisy scan: s2 = x2 + N(0, scan_noise²) — cheap preliminary observation
         s2_tr = x2_tr + rng.randn(N_train) * scan_noise
 
-        # True MNAR policy: acquire when scan is uncertain (|x1 + s2| small)
+        # Reflexive MNAR policy: acquire when the scan is uncertain (|x1 + s2| small)
         # P(acquire | x1, s2) = max(σ(-λ|x1 + s2|), 0.10)
         pi_true = np.maximum(sigmoid(-selectivity * np.abs(x1_tr + s2_tr)), 0.10)
         acquired = rng.binomial(1, pi_true).astype(bool)
@@ -773,11 +779,11 @@ def run_exp5(N_train=3000, N_test=3000, selectivity=2.0, scan_noise=1.5, n_trial
         y_cc = y_tr[acquired]
 
         # CC-ERM (ablation): complete cases, no propensity reweighting
-        # Under MNAR this is ALSO inconsistent — distinguishes from CC-IPW
+        # Under MNAR this is also inconsistent — distinguishes it from CC-IPW
         w_cc_erm = logistic_fit(X_cc, y_cc)
         acc_cc_erm_arr.append(logistic_acc(X_full_te, y_te, w_cc_erm))
 
-        # CC-IPW Oracle: uses TRUE propensity π(x1, s2) — theoretical upper bound
+        # CC-IPW Oracle: uses the known propensity π(x1, s2)
         pi_oracle_clipped = np.clip(pi_true[acquired], 0.05, 0.95)
         w_ipw_oracle = logistic_fit(X_cc, y_cc, weights=1.0 / pi_oracle_clipped)
         acc_ipw_oracle_arr.append(logistic_acc(X_full_te, y_te, w_ipw_oracle))
@@ -799,8 +805,8 @@ def run_exp5(N_train=3000, N_test=3000, selectivity=2.0, scan_noise=1.5, n_trial
     print(f"  Oracle: {orc_mean:.2f}%  ERM: {erm_mean:.2f}%  CC-ERM: {cc_erm_mean:.2f}%  "
           f"CC-IPW-Oracle: {ipw_o_mean:.2f}%  CC-IPW-Est: {ipw_e_mean:.2f}%")
 
-    # Bar chart comparing 4 methods (CC-ERM omitted: finite-sample informativeness
-    # advantage at N=3000 under MNAR does not reflect asymptotic bias narrative)
+    # Bar chart: ERM, CC-IPW (oracle pi), CC-IPW (estimated pi), Oracle.
+    # CC-ERM is reported in the console output above but not plotted here.
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
     methods = ['ERM\n(zero-imp.)', 'CC-IPW\n(oracle \u03c0)', 'CC-IPW\n(est. \u03c0\u0302)', 'Oracle\n(full data)']
     means   = [erm_mean, ipw_o_mean, ipw_e_mean, orc_mean]
@@ -1334,7 +1340,7 @@ def run_exp8_baseline_and_calib(N_train=2000, N_test=3000, n_trials=30,
             erm_m0, erm_m1, ipw_m0, ipw_m1, orc_m0, orc_m1)
 
 
-# ─── Experiment 7 (new): Feedback Loop Dynamics ─────────────────────────────
+# ─── Experiment 7: Feedback Loop Dynamics ───────────────────────────────────
 
 def _gen_feedback_data(N, seed):
     """Generate data with moderate x2 effect for feedback loop demonstration.
@@ -1404,7 +1410,7 @@ def run_exp_feedback_loop(N_init=1000, N_new=500, T=20, window=1,
     Retraining uses a sliding window of the last ``window`` rounds to
     prevent dilution of the feedback signal.
     """
-    print("Running Experiment 7 (new): Feedback Loop Dynamics...")
+    print("Running Experiment 7: Feedback Loop Dynamics...")
 
     x1_te, x2_te, y_te = generate_data(N_test, seed=99)
     X_te = build_feature_matrix(x1_te, x2_te)
@@ -1554,9 +1560,7 @@ def run_exp_feedback_loop(N_init=1000, N_new=500, T=20, window=1,
     return acc_oracle, erm_mean, ipw_mean
 
 
-# ─── Experiment 10 (new): SUPPORT Study Real Data ────────────────────────────
-
-# ─── Experiment 10 (new): SUPPORT Study Real Data ────────────────────────────
+# ─── Experiment 10: SUPPORT Study Real Data ──────────────────────────────────
 
 def run_exp_support(csv_path=None, n_folds=5, seed=42):
     """Validate CC-IPW and DIME on real SUPPORT Study data with natural
@@ -1568,7 +1572,7 @@ def run_exp_support(csv_path=None, n_folds=5, seed=42):
         bun, urine.
     Target: hospdead (in-hospital death).
     """
-    print("Running Experiment 10 (new): SUPPORT Study Real Data...")
+    print("Running Experiment 10: SUPPORT Study Real Data...")
 
     if csv_path is None:
         csv_path = Path(__file__).parent / "support2.csv"
@@ -2082,11 +2086,11 @@ if __name__ == "__main__":
     run_exp4()
     run_exp5()
     run_exp6_mlp()
-    run_exp_feedback_loop()           # Exp 7 (new): feedback loop
-    run_exp7_semisynthetic()          # Exp 8 (renumbered)
-    run_exp8_baseline_and_calib()     # Exp 9 (renumbered)
-    run_exp_support()                 # Exp 10 (new): SUPPORT real data
-    run_exp11_multifeature()          # Exp 11 (new): Multi-feature scaling
+    run_exp_feedback_loop()           # Exp 7: feedback loop
+    run_exp7_semisynthetic()          # Exp 8: semisynthetic experiment
+    run_exp8_baseline_and_calib()     # Exp 9: baselines and calibration
+    run_exp_support()                 # Exp 10: SUPPORT real data
+    run_exp11_multifeature()          # Exp 11: multi-feature scaling
 
     print("\nAll experiments complete. Figures saved to:", FIG_DIR)
     print("Files:")

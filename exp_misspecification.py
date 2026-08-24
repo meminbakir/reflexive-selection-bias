@@ -1,7 +1,7 @@
 """
 Propensity-model misspecification ablation.
 
-How sensitive is the IPW/DIME correction to MISSPECIFICATION of the propensity
+How sensitive is the IPW/DIME correction to misspecification of the propensity
 model?
 
 DESIGN
@@ -12,13 +12,12 @@ acquisition policy:
 
       pi_true(x1, s2) = max( sigmoid( -lambda * |x1 + s2| ),  pi_min ).
 
-The true propensity is genuinely NONLINEAR: it needs the |x1 + s2| basis
-(an x1<->s2 interaction through the absolute value). This is exactly the
-setting where propensity misspecification can bite.
+The propensity is nonlinear because it depends on the |x1 + s2| basis, an
+x1<->s2 interaction through the absolute value.
 
 We estimate the propensity two ways:
-  (a) CORRECT  : logistic on [x1, s2, |x1 + s2|, 1]   (includes the nonlinear basis)
-  (b) MISSPEC. : logistic on [x1, s2, 1]              (omits |x1 + s2|, x1-only-ish linear)
+  (a) Correct  : logistic on [x1, s2, |x1 + s2|, 1]   (includes the nonlinear basis)
+  (b) Misspec. : logistic on [x1, s2, 1]              (omits |x1 + s2|, x1-only-ish linear)
 
 and run five estimators:
   1. ERM                      (zero-imputed, biased baseline)
@@ -30,13 +29,13 @@ and run five estimators:
 For each we report:
   - expensive-coefficient (x2) bias relative to the ORACLE coefficient
   - test accuracy
-  - test AUC (rank-based helper defined here; there is NO module-level AUC)
+  - test AUC (rank-based helper defined here; the simulator has no
+    module-level AUC)
 
-HYPOTHESIS UNDER TEST
----------------------
-Under misspecification the correction degrades GRACEFULLY (reduces but may
-not fully remove the bias) rather than failing catastrophically.  We report
-how much is lost.
+Evaluation target
+-----------------
+Measure the residual bias under propensity misspecification relative to both
+the correctly specified correction and uncorrected ERM.
 
 Run:  conda run -n veri_bilimi python exp_misspecification.py
 """
@@ -56,7 +55,7 @@ import matplotlib.pyplot as plt
 
 import simulation_experiments as S
 
-# ─── Pre-specified settings (FIXED; settings fixed a priori; fixed seed) ────────────────
+# ─── Experiment settings and reproducibility seed ─────────────────────────────────
 SEED          = 20240613
 N_TRAIN       = 3000
 N_TEST        = 5000
@@ -122,7 +121,7 @@ def logit_scores(X, w):
 
 # ─── Propensity estimation ───────────────────────────────────────────────────
 def fit_propensity_correct(x1, s2, acquired):
-    """CORRECT specification: includes the nonlinear |x1+s2| basis."""
+    """Correct specification including the nonlinear |x1+s2| basis."""
     X_prop = np.column_stack([x1, s2, np.abs(x1 + s2), np.ones(len(x1))])
     w_prop = S.logistic_fit(X_prop, acquired.astype(int))
     pi_hat = S.sigmoid(X_prop @ w_prop)
@@ -130,7 +129,7 @@ def fit_propensity_correct(x1, s2, acquired):
 
 
 def fit_propensity_misspec(x1, s2, acquired):
-    """MISSPECIFIED: omits the nonlinear |x1+s2| basis (linear-only)."""
+    """Misspecified model omitting the nonlinear |x1+s2| basis."""
     X_prop = np.column_stack([x1, s2, np.ones(len(x1))])
     w_prop = S.logistic_fit(X_prop, acquired.astype(int))
     pi_hat = S.sigmoid(X_prop @ w_prop)
@@ -140,9 +139,9 @@ def fit_propensity_misspec(x1, s2, acquired):
 # ─── DIME with an explicitly supplied propensity ─────────────────────────────
 def dime_train_with_pi(x1, x2, m, y, pi_supplied, lr=0.05, n_iter=2000,
                        eps=EPS_CLIP):
-    """DIME (single expensive feature) using a SUPPLIED propensity vector.
+    """DIME (single expensive feature) using a supplied propensity vector.
 
-    Mirrors S.dime_train's gradient-split structure exactly, but lets us
+    Matches S.dime_train's gradient-split structure while allowing us to
     inject either the correctly-specified or the misspecified propensity so
     the misspecification ablation is faithful.
 
@@ -331,8 +330,8 @@ def run():
               f"{am*100:>8.2f}+/-{as_*100:<4.2f} {um:>8.4f}+/-{us:<6.4f}")
 
     print("-" * 72)
-    # Interpretation: how much bias is removed vs ERM, and how much
-    # CC-IPW/DIME LOSE under misspecification.
+    # Compare bias removal against ERM and the additional bias introduced by
+    # propensity misspecification.
     erm_bias = bias_means['ERM']
     ipw_c_bias = bias_means['CC-IPW(correct)']
     ipw_m_bias = bias_means['CC-IPW(misspec)']
@@ -349,33 +348,30 @@ def run():
           f"CC-IPW(misspec): {pct_removed(ipw_m_bias):.1f}%")
     print(f"   DIME(correct)  : {pct_removed(dime_c_bias):.1f}%  "
           f"DIME(misspec)  : {pct_removed(dime_m_bias):.1f}%")
-    print(" Bias LOST to misspecification (correct -> misspec):")
+    print(" Additional bias under misspecification (correct -> misspec):")
     ipw_lost = ipw_m_bias - ipw_c_bias
     dime_lost = dime_m_bias - dime_c_bias
     print(f"   CC-IPW: +{ipw_lost:.4f} abs-bias  ({(ipw_m_bias/max(ipw_c_bias,1e-9)):.2f}x)")
     print(f"   DIME  : +{dime_lost:.4f} abs-bias  ({(dime_m_bias/max(dime_c_bias,1e-9)):.2f}x)")
 
-    # Graceful-degradation test: misspecified correction still beats ERM,
-    # and does NOT blow past ERM bias (no catastrophic failure).
-    ipw_graceful = (ipw_m_bias < erm_bias)
-    dime_graceful = (dime_m_bias < erm_bias)
-    # "catastrophic" = misspecified bias worse than the uncorrected ERM bias
-    ipw_catastrophic = (ipw_m_bias > erm_bias * 1.05)
-    dime_catastrophic = (dime_m_bias > erm_bias * 1.05)
+    # Compare each misspecified correction with the uncorrected ERM bias.
+    ipw_improves_on_erm = (ipw_m_bias < erm_bias)
+    dime_improves_on_erm = (dime_m_bias < erm_bias)
+    ipw_worse_than_erm = (ipw_m_bias > erm_bias * 1.05)
+    dime_worse_than_erm = (dime_m_bias > erm_bias * 1.05)
     print("-" * 72)
-    print(" Graceful degradation (misspec still reduces bias vs ERM)?")
-    print(f"   CC-IPW: {'YES' if ipw_graceful else 'NO'}   "
-          f"catastrophic(worse than ERM)?: {'YES' if ipw_catastrophic else 'no'}")
-    print(f"   DIME  : {'YES' if dime_graceful else 'NO'}   "
-          f"catastrophic(worse than ERM)?: {'YES' if dime_catastrophic else 'no'}")
+    print(" Misspecified correction compared with ERM:")
+    print(f"   CC-IPW improves on ERM: {ipw_improves_on_erm}; "
+          f">5% worse than ERM: {ipw_worse_than_erm}")
+    print(f"   DIME improves on ERM:   {dime_improves_on_erm}; "
+          f">5% worse than ERM: {dime_worse_than_erm}")
 
-    claim_supported = bool(
+    robustness_criteria_met = bool(
         (ipw_m_bias < erm_bias) and (dime_m_bias < erm_bias)
-        and (not ipw_catastrophic) and (not dime_catastrophic)
+        and (not ipw_worse_than_erm) and (not dime_worse_than_erm)
     )
     print("-" * 72)
-    print(f" CLAIM (graceful degradation, not catastrophic failure) SUPPORTED: "
-          f"{claim_supported}")
+    print(f" Robustness criteria met: {robustness_criteria_met}")
     print("=" * 72)
 
     # ---- Figure: bias (left) and AUC (right) across the five estimators ----
@@ -485,13 +481,13 @@ def run():
             'DIME_abs': float(dime_lost),
             'DIME_ratio': float(dime_m_bias / max(dime_c_bias, 1e-9)),
         },
-        'graceful_degradation': {
-            'CC-IPW_still_beats_ERM': bool(ipw_graceful),
-            'CC-IPW_catastrophic': bool(ipw_catastrophic),
-            'DIME_still_beats_ERM': bool(dime_graceful),
-            'DIME_catastrophic': bool(dime_catastrophic),
+        'misspecification_comparison': {
+            'CC-IPW_improves_on_ERM': bool(ipw_improves_on_erm),
+            'CC-IPW_more_than_5pct_worse_than_ERM': bool(ipw_worse_than_erm),
+            'DIME_improves_on_ERM': bool(dime_improves_on_erm),
+            'DIME_more_than_5pct_worse_than_ERM': bool(dime_worse_than_erm),
         },
-        'claim_supported': claim_supported,
+        'robustness_criteria_met': robustness_criteria_met,
         'figure_pdf': str(out_pdf),
         'figure_png': str(out_png),
     }

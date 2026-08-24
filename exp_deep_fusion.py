@@ -4,7 +4,7 @@ Deep, higher-dimensional fusion under selective acquisition
 
 A controlled study of whether inverse-propensity weighting (IPW) still helps a
 deep fusion model when the expensive modality is higher-dimensional and carries
-genuinely nonlinear signal.
+nonlinear signal.
 
 DESIGN
 ------
@@ -13,7 +13,7 @@ Two modalities are fused by a single deep model:
   * Cheap modality   x1 in R^{d1} (d1 = 5)  -- ALWAYS observed. Carries a
     weak/moderate linear signal about the label.
   * Expensive modality x2 in R^{d2} (d2 = 12) -- observed only when a
-    selective policy fires. Carries GENUINELY NONLINEAR signal about the label
+    selective policy fires. Carries nonlinear signal about the label
     (pairwise products + squared terms), scaled by a signal-strength parameter
     s that is swept. A linear model in x2 cannot represent this functional, so
     a deep fusion model is warranted.
@@ -32,9 +32,9 @@ Acquisition policy (x1-gated, inducing selection on the x2 part)
   Because x2 is signal-bearing and acquisition depends on x1 (correlated with
   y), the acquired subsample is a biased view of the x1 -> x2 -> y relationship.
 
-Estimators (all share the SAME deep MLP and identical hyperparameters)
+Estimators (all share the same deep MLP and identical hyperparameters)
   ERM     : all N rows, x2 zero-imputed where not acquired, uniform weights.
-  CC-ERM  : acquired rows only (genuine full features), uniform weights
+  CC-ERM  : acquired rows only (observed full features), uniform weights
             (complete-case, no propensity weighting) -- ablation.
   IPW     : acquired rows only, weights = 1/pi_hat with pi_hat estimated from
             the cheap modality x1 -- the correction.
@@ -46,15 +46,15 @@ Two evaluations (both reported)
   deployment : test x2 zero-imputed wherever the same policy did not acquire it
                (a realistic deployed selective-acquisition pipeline).
 
-HYPOTHESIS under test
+Evaluation target
   Does the correction make the learned deep model closer to the oracle, and on
   which evaluation does it show? We explicitly distinguish "the correction
   improves the model" (full-feature evaluation) from "the correction fills a
   missing modality at test" (it cannot: a test point whose x2 was never
   acquired cannot benefit from any training-time fix).
 
-Everything is averaged over N_TRIALS trials with a fixed master seed and
-pre-specified settings. Numbers are printed to stdout, a matplotlib figure is
+Everything is averaged over N_TRIALS trials with a fixed master seed and fixed
+experiment settings. Numbers are printed to stdout, a matplotlib figure is
 saved (PDF+PNG), and the numeric results are dumped to JSON.
 
 Run:  conda run -n veri_bilimi python exp_deep_fusion.py
@@ -84,7 +84,7 @@ os.makedirs(FIG_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
-# ----------------------- Pre-specified settings -----------------------
+# ----------------------- Experiment settings -----------------------
 SEED          = 20240617
 D1            = 5          # cheap modality dim (always observed)
 D2            = 12         # expensive modality dim (selectively acquired)
@@ -117,7 +117,7 @@ S_READOUT = _gen_rng.randn(D1)
 
 
 def g_x2(x2):
-    """Genuinely nonlinear functional of x2 (cross terms + quadratics)."""
+    """Nonlinear functional of x2 (cross terms plus quadratics)."""
     cross = np.zeros(len(x2))
     for k in range(K_CROSS):
         cross += CROSS_W[k] * x2[:, CROSS_I[k]] * x2[:, CROSS_J[k]]
@@ -355,10 +355,10 @@ def main():
         ax.fill_between(xs, orc_m - orc_s, orc_m + orc_s, color="black", alpha=0.10)
         ax.plot(xs, orc_m, "k--o", label="Oracle (full data)", markersize=7)
         ax.fill_between(xs, ipw_m - ipw_s, ipw_m + ipw_s, color="tab:blue", alpha=0.15)
-        ax.plot(xs, ipw_m, "b-s", label="IPW-ERM (1/$\\hat\\pi$)", markersize=7)
+        ax.plot(xs, ipw_m, "b-s", label="CC-IPW (1/$\\hat\\pi$)", markersize=7)
         ax.fill_between(xs, erm_m - erm_s, erm_m + erm_s, color="tab:red", alpha=0.15)
         ax.plot(xs, erm_m, "r-^", label="Zero-imputed ERM", markersize=7)
-        # CC-ERM ablation (full-feature panel, where the paper discusses it).
+        # CC-ERM ablation, shown on the full-feature panel only.
         if evalkind == 'full':
             ax.plot(xs, cc_m, color="tab:green", marker="d", linestyle=":",
                     label="CC-ERM (complete-case)", markersize=7)

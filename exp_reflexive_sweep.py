@@ -4,23 +4,23 @@ Reflexive-MNAR coverage sweep.
 We extend the reflexive noisy-scan DGP (run_exp5 reports a single
 (selectivity, scan_noise) operating point) into a 2D sweep over
 
-    * scan noise sigma_s  (small => strongly reflexive / TRUE MNAR;
+    * scan noise sigma_s  (small => strongly reflexive MNAR;
                            large => the scan is uninformative about x2, so the
                            policy depends on x1 + noise only => effectively MAR)
     * policy selectivity  lambda
 
-For each setting, averaged over >=20 trials, we report the EXPENSIVE-COEFFICIENT
-BIAS (the fitted x2 coefficient minus the Oracle x2 coefficient) and the test
-ACCURACY for five estimators:
+For each setting, averaged over >=20 trials, we report the expensive-coefficient
+bias (the fitted x2 coefficient minus the Oracle x2 coefficient) and test
+accuracy for five estimators:
 
     Oracle  : logistic fit on full (x1, x2) population               (reference)
     ERM     : logistic fit on ALL rows, x2 zero-imputed where missing (biased)
-    CC-ERM  : logistic fit on complete cases only, re-included, NO reweighting
+    CC-ERM  : logistic fit on complete cases only, re-included, without reweighting
     CC-IPW  : complete cases, IPW with ESTIMATED propensity on [x1, s2, |x1+s2|]
     DIME    : gradient-split per-feature IPW (uplift coefficient on M*x2)
 
-HYPOTHESIS UNDER TEST: across the MNAR->MAR sweep, ERM and CC-ERM stay biased
-while CC-IPW and DIME track the Oracle.
+The sweep compares the residual coefficient bias of ERM and CC-ERM with that of
+CC-IPW and DIME across the MNAR-to-MAR range.
 
 Everything is logged to stdout; a figure (PDF+PNG) and a JSON of all numbers,
 settings and the seed are written to ./figures/ and ./results/.
@@ -55,7 +55,7 @@ FIG_PNG = str(FIG_DIR / "reflexive_sweep.png")
 JSON_OUT = str(RESULTS_DIR / "reflexive_sweep.json")
 
 # ---------------------------------------------------------------------------
-# Pre-specified settings (fixed seed)
+# Experiment settings and reproducibility seed
 # ---------------------------------------------------------------------------
 SEED = 20240613               # fixed master seed
 N_TRAIN = 3000                # matches run_exp5 default
@@ -111,7 +111,7 @@ def rank_auc(scores, labels):
 # ---------------------------------------------------------------------------
 # One reflexive-MNAR trial for a given (selectivity, scan_noise).
 # Returns per-method (x2_coef, accuracy, auc) plus the acquisition rate.
-# DGP is exactly run_exp5's reflexive noisy-scan policy.
+# The DGP matches the reflexive noisy-scan policy in run_exp5.
 # ---------------------------------------------------------------------------
 def run_one_trial(selectivity, scan_noise, trial, X_full_te, y_te,
                   x1_te, x2_te, w_oracle):
@@ -121,7 +121,7 @@ def run_one_trial(selectivity, scan_noise, trial, X_full_te, y_te,
     # Noisy cheap scan s2 = x2 + N(0, scan_noise^2).
     s2_tr = x2_tr + rng.randn(N_TRAIN) * scan_noise
 
-    # TRUE MNAR policy: acquire when the scan is uncertain (|x1 + s2| small).
+    # Reflexive MNAR policy: acquire when the scan is uncertain (|x1 + s2| small).
     pi_true = np.maximum(S.sigmoid(-selectivity * np.abs(x1_tr + s2_tr)), PI_MIN)
     acquired = rng.binomial(1, pi_true).astype(bool)
     acq_rate = float(acquired.mean())
@@ -270,8 +270,7 @@ def main():
                       f"{s['auc_mean']:6.3f}+/-{s['auc_std']:4.3f}")
 
     # -------------------------------------------------------------------
-    # Outcome computation (on the MAIN selectivity).
-    # Hypothesis: ERM & CC-ERM stay biased; CC-IPW & DIME track the Oracle.
+    # Recovery diagnostics at the main selectivity.
     # -------------------------------------------------------------------
     main_res = results[SELECTIVITY_MAIN]
     abs_bias = {m: np.mean([main_res[sig][m]["abs_bias_mean"]
@@ -281,21 +280,20 @@ def main():
     for m in METHODS:
         print(f"    {m:8s}: {abs_bias[m]:.4f}")
 
-    # A method "tracks the oracle" if its mean abs bias is much smaller than
-    # ERM's; "stays biased" if comparable to ERM. Use ERM as the bias yardstick.
+    # Compare each method's mean absolute bias with the ERM reference value.
     erm_bias = abs_bias["ERM"]
     corrected = {m: abs_bias[m] for m in ("CC-IPW", "DIME")}
     biased = {m: abs_bias[m] for m in ("ERM", "CC-ERM")}
-    # Strong support: both corrected methods <50% of ERM bias AND both biased
-    # methods >50% of ERM bias.
+    # Require both corrected methods to have less than 50% of the ERM bias and
+    # both uncorrected methods to have more than 50% of the ERM bias.
     corrected_ok = all(v < 0.5 * erm_bias for v in corrected.values())
     biased_stays = all(v > 0.5 * erm_bias for v in biased.values())
-    supports = bool(corrected_ok and biased_stays)
+    recovery_criteria_met = bool(corrected_ok and biased_stays)
     print(f"\n  ERM bias yardstick = {erm_bias:.4f}")
     print(f"  CC-IPW < 0.5*ERM ? {abs_bias['CC-IPW'] < 0.5*erm_bias}  "
           f"DIME < 0.5*ERM ? {abs_bias['DIME'] < 0.5*erm_bias}")
     print(f"  CC-ERM stays biased (>0.5*ERM) ? {abs_bias['CC-ERM'] > 0.5*erm_bias}")
-    print(f"\n  >>> meets_expectation = {supports}")
+    print(f"\n  Recovery criteria met: {recovery_criteria_met}")
 
     # -------------------------------------------------------------------
     # Figure: bias and accuracy vs scan noise (main selectivity).
@@ -386,14 +384,14 @@ def main():
         },
         "mean_abs_coef_bias_main_selectivity": abs_bias,
         "erm_bias_yardstick": float(erm_bias),
-        "meets_expectation": supports,
+        "recovery_criteria_met": recovery_criteria_met,
         "figure_pdf": FIG_PDF, "figure_png": FIG_PNG, "json": JSON_OUT,
     }
     with open(JSON_OUT, "w") as f:
         json.dump(payload, f, indent=2)
     print(f"  Saved JSON:   {JSON_OUT}")
     print("\nDone.")
-    return supports
+    return recovery_criteria_met
 
 
 if __name__ == "__main__":

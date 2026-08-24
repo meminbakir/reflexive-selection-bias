@@ -22,15 +22,13 @@ run_exp_feedback_loop), define
 
     b_t = | w_x2(t) - w_x2_oracle | ,
 
-FIT (c, delta) on EARLY rounds only (rounds 0..K_FIT), then PREDICT the
-remaining rounds and the fixed point b* OUT-OF-SAMPLE.  We ALSO predict on a
-DIFFERENT voi_scale than the one used to fit (genuine out-of-sample
-generalisation across operating conditions).
+We fit (c, delta) on rounds 0..K_FIT, predict the remaining rounds and the
+fixed point b* out of sample, and evaluate the fitted recursion at a second
+voi_scale to measure generalisation across operating conditions.
 
-The hypothesis under test:
-  ERM's |w_x2| stabilises at an attenuated equilibrium, and the qualitative
-  lower bound (*) is corroborated by a fitted recursion that predicts that
-  equilibrium out-of-sample.
+Evaluation target:
+  Fit the recursion to ERM's |w_x2| trajectory and measure its prediction
+  error for the equilibrium and for a second operating condition.
 
 Everything is printed to stdout; a matplotlib figure is saved to
 ./figures/bias_recursion.{pdf,png} and all numbers to
@@ -51,7 +49,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
-# Reuse the existing simulator (do NOT reimplement the DGP / fits).
+# Import the simulator helpers so the DGP and fitting routines are shared.
 # ---------------------------------------------------------------------------
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -65,9 +63,9 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 EXP_ID = "bias_recursion"
 
 # ---------------------------------------------------------------------------
-# PRE-SPECIFIED settings (settings fixed a priori; fixed seed).
-# These mirror run_exp_feedback_loop's defaults; K_FIT and the OOS voi_scale
-# are pre-registered before looking at any fitted number.
+# Experiment settings and reproducibility seed. These values mirror
+# run_exp_feedback_loop's defaults; K_FIT sets the early-round fit window and
+# VOI_SCALE_OOS sets the cross-condition evaluation point.
 # ---------------------------------------------------------------------------
 SEED = 20240617          # master seed
 N_INIT = 1000            # round-0 sample size (matches run_exp_feedback_loop)
@@ -75,8 +73,8 @@ N_NEW = 500              # per-round new-batch size
 T = 20                   # number of retraining rounds (T=20)
 WINDOW = 1               # sliding window (matches run_exp_feedback_loop default)
 N_TRIALS = 30            # >= 20 for stable mean +/- std
-VOI_SCALE_FIT = 0.20     # in-distribution voi_scale used to FIT (c, delta)
-VOI_SCALE_OOS = 0.30     # DIFFERENT voi_scale for genuine out-of-sample test
+VOI_SCALE_FIT = 0.20     # in-distribution voi_scale used to fit (c, delta)
+VOI_SCALE_OOS = 0.30     # voi_scale used for cross-condition evaluation
 K_FIT = 6                # fit recursion on rounds 0..K_FIT inclusive; predict K_FIT+1..T
 N_ORACLE = 50000         # oracle fit size (matches run_exp_feedback_loop)
 ORACLE_SEED = 0          # oracle data seed (matches run_exp_feedback_loop)
@@ -111,8 +109,8 @@ def auc_rank(scores, labels):
 
 
 # ---------------------------------------------------------------------------
-# ERM feedback trajectory: replicates run_exp_feedback_loop's ERM branch
-# EXACTLY (generate_data bimodal DGP, _voi_policy, zero-imputed logistic_fit,
+# ERM feedback trajectory matching run_exp_feedback_loop's ERM branch
+# (generate_data bimodal DGP, _voi_policy, zero-imputed logistic_fit, and a
 # sliding window of size WINDOW), returning per-round w_x2 and test AUC.
 # ---------------------------------------------------------------------------
 def erm_trajectory(voi_scale, w_oracle, X_te, y_te, n_trials, t_max,
@@ -214,7 +212,7 @@ def main():
     print("Quantitative feedback recursion for coefficient bias "
           "(out-of-sample)")
     print("=" * 78)
-    print("SETTINGS (pre-specified, fixed seed; settings fixed a priori):")
+    print("EXPERIMENT SETTINGS:")
     print(f"  seed={SEED}  N_init={N_INIT}  N_new={N_NEW}  T={T}  window={WINDOW}")
     print(f"  n_trials={N_TRIALS}  K_FIT={K_FIT}  "
           f"voi_scale_fit={VOI_SCALE_FIT}  voi_scale_oos={VOI_SCALE_OOS}")
@@ -321,9 +319,9 @@ def main():
           f"[expected ~1.71 vs oracle {w_x2_oracle:.2f}]")
 
     # ===================================================================
-    # (B) GENUINE OUT-OF-SAMPLE across operating condition:
+    # (B) Out-of-sample evaluation across operating conditions:
     #     predict rounds 0..T at voi_scale=VOI_SCALE_OOS using (c,delta)
-    #     FITTED at VOI_SCALE_FIT.  Compare to observed trajectory at OOS scale.
+    #     fitted at VOI_SCALE_FIT. Compare with the observed OOS trajectory.
     # ===================================================================
     w1_oos, auc_oos, acc_oos = erm_trajectory(
         VOI_SCALE_OOS, w_oracle, X_te, y_te, N_TRIALS, T)
@@ -348,7 +346,7 @@ def main():
 
     print()
     print("-" * 78)
-    print(f"(B) GENUINE OUT-OF-SAMPLE  voi_scale={VOI_SCALE_OOS} "
+    print(f"(B) Out-of-sample  voi_scale={VOI_SCALE_OOS} "
           f"(recursion fitted at {VOI_SCALE_FIT})")
     print("-" * 78)
     print(" round    |w_x2|(obs)     b_t(obs)      b_t(pred from FIT recursion)")
@@ -364,18 +362,14 @@ def main():
           f"(attenuation {atten_obs_oos*100:.1f}%)")
 
     # ===================================================================
-    # Summary logic (computed, not narrated): the claim is corroborated if
-    #  (i) the recursion fit is good on early rounds (a in (0,1), delta>0),
-    #  (ii) the predicted fixed point b* is close to the observed equilibrium
-    #       out-of-sample, and
-    #  (iii) the predicted equilibrium attenuation lands near the expected ~39%.
+    # Recursion diagnostics: early-round fit validity, fixed-point prediction
+    # error, attenuation error, and cross-condition prediction error.
     # ===================================================================
     rel_err_bstar_vs_obs = abs(bstar_fit - b_obs_equilibrium) / max(b_obs_equilibrium, 1e-9)
     # Contraction: the valid contraction range is c in [0,1).  The point estimate may
     # sit marginally above 1 because the dynamics saturate in ~1 round (slope
-    # a~0), but a well-defined POSITIVE fixed point b*=delta/c>0 is what the
-    # proposition's equilibrium claim requires.  We therefore test (i) a finite
-    # positive fixed point AND (ii) the 95% CI for c overlaps the valid range.
+    # a~0). The combined diagnostic requires a finite positive fixed point and
+    # overlap between the 95% CI for c and the valid range.
     finite_pos_fixedpoint = bool(np.isfinite(bstar_fit) and bstar_fit > 0.0)
     c_ci_overlaps_valid = bool(c_ci[0] < 1.0)
     contraction_ok = finite_pos_fixedpoint and c_ci_overlaps_valid
@@ -385,11 +379,11 @@ def main():
     atten_close_39 = abs(atten_pred_bstar * 100 - 39.0) < 8.0  # within +/-8 pp of 39%
     oos_cross_ok = cross_mae < 0.20                  # absolute coeff-units tolerance
 
-    # The CENTRAL claim is predictive: a recursion fitted on early rounds
-    # predicts the equilibrium out-of-sample (within-condition AND across a
-    # different voi_scale) and lands near the expected ~39% attenuation.
-    meets_expectation = bool(contraction_ok and delta_pos and fixedpoint_ok
-                    and atten_close_39 and oos_cross_ok)
+    # Aggregate the predictive diagnostics for the fitted recursion.
+    recursion_criteria_met = bool(
+        contraction_ok and delta_pos and fixedpoint_ok
+        and atten_close_39 and oos_cross_ok
+    )
 
     print()
     print("=" * 78)
@@ -406,7 +400,7 @@ def main():
     print(f"  predicted attenuation ~ 39% (+/-8): {atten_close_39}  "
           f"(pred {atten_pred_bstar*100:.1f}%)")
     print(f"  cross-condition OOS MAE < 0.20    : {oos_cross_ok}  (MAE={cross_mae:.3f})")
-    print(f"  ==> meets_expectation = {meets_expectation}")
+    print(f"  recursion criteria met           : {recursion_criteria_met}")
 
     # ----------------------------------------------------------------------
     # FIGURE: observed b_t (points) vs fitted/predicted recursion (line),
@@ -435,16 +429,16 @@ def main():
                 label=rf"observed equil. $={b_obs_equilibrium:.2f}$")
     axA.set_xlabel("Retraining round $t$")
     axA.set_ylabel(r"Coefficient bias $b_t$")
-    axA.set_title(f"(a) In-distribution (voi\\_scale={VOI_SCALE_FIT})\n"
+    axA.set_title(f"(a) In-distribution (voi_scale={VOI_SCALE_FIT})\n"
                   f"$c={c_fit:.2f},\\ \\delta={delta_fit:.2f},\\ "
                   f"b^*={bstar_fit:.2f}$")
     axA.set_xlim(-0.5, T + 0.5)
     axA.legend(loc="best", framealpha=0.9)
 
-    # Panel (b): genuine OOS at a different voi_scale, predicted by FIT recursion
+    # Panel (b): OOS at a different voi_scale, predicted by the fitted recursion
     axB.errorbar(rounds, b_mean_oos, yerr=b_std_oos, fmt="s",
                  color="tab:purple", ms=5, capsize=2, alpha=0.85,
-                 label=rf"observed $b_t$ (voi\_scale={VOI_SCALE_OOS})")
+                 label=f"observed $b_t$ (voi_scale={VOI_SCALE_OOS})")
     axB.plot(rounds, b_pred_oos, "-", color="black",
              label=f"recursion fitted at {VOI_SCALE_FIT}\n(seeded from OOS $b_0$)")
     axB.axhline(bstar_fit, color="tab:blue", ls="--", lw=1.6,
@@ -453,7 +447,7 @@ def main():
                 label=rf"observed equil. $={b_obs_equil_oos:.2f}$")
     axB.set_xlabel("Retraining round $t$")
     axB.set_ylabel(r"Coefficient bias $b_t$")
-    axB.set_title("(b) Genuine out-of-sample\n"
+    axB.set_title("(b) Out-of-sample\n"
                   f"cross-condition MAE$={cross_mae:.3f}$")
     axB.set_xlim(-0.5, T + 0.5)
     axB.legend(loc="best", framealpha=0.9)
@@ -545,7 +539,7 @@ def main():
             "rel_err_bstar_vs_obs": float(rel_err_bstar_vs_obs),
             "predicted_attenuation_near_39pct": atten_close_39,
             "cross_condition_oos_mae_below_0.20": oos_cross_ok,
-            "meets_expectation": meets_expectation,
+            "recursion_criteria_met": recursion_criteria_met,
             "caveat": "Point estimate c=1.07 sits marginally above the "
                       "valid [0,1) contraction range because the ERM "
                       "dynamics saturate in ~1 round (regression slope a~0); "
@@ -555,9 +549,8 @@ def main():
         },
         "expected_reference": {
             "description": "ERM |w_x2| stabilises at a 39%-attenuated equilibrium"
-                     "(|w_x2| ~ 1.71 vs oracle 2.82); qualitative lower bound "
-                     "corroborated by a fitted recursion predicting the "
-                     "equilibrium out-of-sample.",
+                     " (|w_x2| ~ 1.71 vs oracle 2.82); a fitted recursion "
+                     "predicts the equilibrium out-of-sample.",
             "expected_oracle_wx2": 2.82,
             "expected_equilibrium_wx2": 1.71,
             "expected_attenuation_pct": 39.0,
@@ -569,7 +562,7 @@ def main():
     print(f"Saved JSON:   {out_json}")
     print()
     print("=" * 78)
-    print(f"FINAL meets_expectation = {meets_expectation}")
+    print(f"FINAL recursion_criteria_met = {recursion_criteria_met}")
     print("=" * 78)
     return results
 

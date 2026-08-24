@@ -1,6 +1,6 @@
 # Reflexive Selection Bias in Deployed Multimodal Fusion
 
-Code for the experiments in the paper. A deployed fusion model often decides when to acquire an expensive modality based on a cheaper one, then retrains on the data it collected. That feedback loop biases the model. We study the bias and correct it with inverse-propensity weighting (CC-IPW) and a gradient-split variant (DIME).
+A deployed fusion model often decides when to acquire an expensive modality based on a cheaper one, then retrains on the data it collected. That feedback loop biases the model. This code studies the bias and corrects it with inverse-propensity weighting (CC-IPW) and a gradient-split variant (DIME).
 
 ## Requirements
 
